@@ -1,5 +1,5 @@
 import { AdapterError, Requester, Validator } from '.'
-import {
+import type {
   AdapterRequest,
   Config,
   APIEndpoint,
@@ -7,14 +7,17 @@ import {
   InputParameters,
   AdapterContext,
   MakeResultPath,
-} from '@chainlink/types'
+  TBaseInputParameters,
+  AdapterData,
+  UpstreamEndpointsGroup,
+} from '../../types'
 import { logger } from '../modules'
+import { cloneDeep } from 'lodash'
 
-export const baseInputParameters: InputParameters = {
+export const baseInputParameters: InputParameters<TBaseInputParameters> = {
   endpoint: {
     description: 'The External Adapter "endpoint" name to use.',
     required: false,
-    type: 'string',
   },
 
   resultPath: {
@@ -31,7 +34,7 @@ export const baseInputParameters: InputParameters = {
   tokenOverrides: {
     description: 'Override the mapping of token symbols to smart contract address',
     required: false,
-    // type: 'string', TODO: Once complex types are supported this could be { [network: string]: { [token: string]: string } }
+    type: 'string', // TODO: Once complex types are supported this could be { [network: string]: { [token: string]: string } }
   },
   includes: {
     description:
@@ -41,10 +44,10 @@ export const baseInputParameters: InputParameters = {
   },
 }
 
-const findSupportedEndpoint = <C extends Config>(
-  apiEndpoints: Record<string, APIEndpoint<C>>,
+const findSupportedEndpoint = <C extends Config, D extends AdapterData>(
+  apiEndpoints: Record<string, APIEndpoint<C, D>>,
   endpoint: string,
-): APIEndpoint<C> | null => {
+): APIEndpoint<C, D> | null => {
   for (const apiEndpoint of Object.values(apiEndpoints)) {
     // Iterate through supported endpoints of a given Chainlink endpoint
     for (const supportedChainlinkEndpoint of apiEndpoint.supportedEndpoints) {
@@ -56,13 +59,13 @@ const findSupportedEndpoint = <C extends Config>(
   return null
 }
 
-const selectEndpoint = <C extends Config>(
+const selectEndpoint = <C extends Config, D extends AdapterData>(
   request: AdapterRequest,
   config: C,
-  apiEndpoints: Record<string, APIEndpoint<C>>,
+  apiEndpoints: Record<string, APIEndpoint<C, D>>,
   customParams?: InputParameters,
-): APIEndpoint<C> => {
-  const params = customParams || baseInputParameters
+): APIEndpoint<C, D> => {
+  const params = customParams ?? {}
   const validator = new Validator(request, params, {}, { shouldThrowError: false })
 
   const jobRunID = validator.validated.id
@@ -92,14 +95,13 @@ const selectEndpoint = <C extends Config>(
   if (apiEndpoint.endpointOverride) {
     const overridenEndpoint = apiEndpoint.endpointOverride(request)
     if (overridenEndpoint) apiEndpoint = findSupportedEndpoint(apiEndpoints, overridenEndpoint)
-    if (request?.data?.endpoint) request.data.endpoint = overridenEndpoint
-
     if (!apiEndpoint)
       throw new AdapterError({
         jobRunID,
         message: `Overriden Endpoint ${overridenEndpoint} not supported.`,
         statusCode: 500,
       })
+    if (request?.data?.endpoint && overridenEndpoint) request.data.endpoint = overridenEndpoint
   }
 
   // Allow adapter endpoints to dynamically query different endpoint resultPaths
@@ -113,16 +115,106 @@ const selectEndpoint = <C extends Config>(
   return apiEndpoint
 }
 
-const buildSelector = <C extends Config>(
+/**
+ *
+ * @param request the request coming in to the External Adapter
+ * @param downstreamConfig configuration for the downstream adapter (composite)
+ * @param downstreamEndpoints endpoints for the downstream adapter (composite)
+ * @param upstreamEndpointsGroups endpoint groups for the upstream adapter (source)
+ *
+ * The following data structure is used:
+ *
+ * [
+ *
+ *    input property name of upstream adapter name,
+ *
+ *    upstream Endpoints mapped to UPPERCASE adapter names,
+ *
+ *    the endpoint name to select upstream
+ *
+ * ]
+ *
+ * @param upstreamConfig configuration for the upstream adapter (source)
+ * @param ignoreRequired whether to maintain the required status of input parameters
+ * @param customParams additional input parameters to add to the ones defined within the API endpoint
+ * @returns
+ */
+const selectCompositeEndpoint = <ConfigDownstream extends Config, ConfigUpstream extends Config>(
   request: AdapterRequest,
+  downstreamConfig: ConfigDownstream,
+  downstreamEndpoints: Record<string, APIEndpoint<ConfigDownstream>>,
+  upstreamEndpointsGroups: UpstreamEndpointsGroup[],
+  upstreamConfig: ConfigUpstream,
+  ignoreRequired = false,
+  customParams?: InputParameters,
+): APIEndpoint<ConfigDownstream> => {
+  const downstreamEndpoint = selectEndpoint(
+    request,
+    downstreamConfig,
+    downstreamEndpoints,
+    customParams,
+  )
+
+  let additionalInputParameters = {}
+
+  for (const [inputPropertyName, adapterMap, upstreamEndpointName] of upstreamEndpointsGroups) {
+    const keyFromRequest = request.data[inputPropertyName] as string
+    const upstreamAPIEndpoints = adapterMap[keyFromRequest?.toUpperCase()]
+
+    if (!upstreamAPIEndpoints) {
+      logger.warn(
+        `The request provided a ${inputPropertyName} of ${keyFromRequest} that was not found while merging upstream input parameters. It may not be supported or may be misconfigured. SKIPPING`,
+      )
+      continue
+    }
+
+    // Modify the endpoint input parameter on the request data to select the upstream endpoint code
+    const requestWithUpstreamEndpoint = cloneDeep(request)
+    requestWithUpstreamEndpoint.data.endpoint = upstreamEndpointName
+
+    const upstreamEndpoint = selectEndpoint(
+      requestWithUpstreamEndpoint,
+      upstreamConfig,
+      upstreamAPIEndpoints,
+      customParams,
+    )
+
+    // Note: Ignoring required parameters will lose alias names
+    // TODO: this will be handled better once input parameters are refactored to include: default, required, and aliases
+    const upstreamInputParameters = ignoreRequired
+      ? Object.fromEntries(
+          Object.keys(upstreamEndpoint.inputParameters || {}).map((parameter) => [
+            parameter,
+            false,
+          ]),
+        )
+      : upstreamEndpoint.inputParameters
+
+    additionalInputParameters = {
+      ...additionalInputParameters,
+      ...upstreamInputParameters,
+    }
+  }
+
+  // Merge input parameters, favoring the composite input parameters
+  downstreamEndpoint.inputParameters = {
+    ...downstreamEndpoint.inputParameters,
+    ...additionalInputParameters,
+  }
+
+  return downstreamEndpoint
+}
+
+const buildSelector = <C extends Config, D extends AdapterData>(
+  request: AdapterRequest<D>,
   context: AdapterContext,
   config: C,
-  apiEndpoints: Record<string, APIEndpoint<C>>,
+  apiEndpoints: Record<string, APIEndpoint<C, D>>,
   customParams?: InputParameters,
 ): Promise<AdapterResponse> => {
   Requester.logConfig(config)
 
-  const apiEndpoint = selectEndpoint<C>(request, config, apiEndpoints, customParams)
+  const apiEndpoint = selectEndpoint<C, D>(request, config, apiEndpoints, customParams)
 
   if (typeof apiEndpoint.execute === 'function') {
     return apiEndpoint.execute(request, context, config)
@@ -136,4 +228,4 @@ const buildSelector = <C extends Config>(
   })
 }
 
-export const Builder = { selectEndpoint, buildSelector }
+export const Builder = { selectEndpoint, selectCompositeEndpoint, buildSelector }

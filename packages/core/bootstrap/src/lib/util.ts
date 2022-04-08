@@ -1,9 +1,67 @@
-import { AdapterImplementation, AdapterRequest } from '@chainlink/types'
+import type {
+  AdapterContext,
+  AdapterImplementation,
+  AdapterRequest,
+  EnvDefaults,
+  UnknownWSMessage,
+} from '../types'
+import type { CacheEntry } from './middleware/cache/types'
 import { Decimal } from 'decimal.js'
-import { flatMap, values, pick, omit } from 'lodash'
+import { flatMap, values, pick, omit, List } from 'lodash'
 import objectHash from 'object-hash'
 import { v4 as uuidv4 } from 'uuid'
-import { CacheEntry } from './middleware/cache/types'
+import { logger } from './modules'
+
+export const isString = (value: unknown): boolean =>
+  typeof value === 'string' || value instanceof String
+
+export const isNumber = (value: unknown): boolean => typeof value === 'number'
+
+/**
+ * Used in the `getEnv` util function as a backup when an env var
+ * is `empty` or `undefined`, and no `envDefaultOverride` is given.
+ */
+export const baseEnvDefaults: EnvDefaults = {
+  BASE_URL: '/',
+  EA_PORT: '8080',
+  METRICS_PORT: '9080',
+  RETRY: '1',
+  API_TIMEOUT: '30000',
+  SERVER_RATE_LIMIT_MAX: '250', // default to 250 req / 5 seconds max
+  SERVER_SLOW_DOWN_AFTER_FACTOR: '0.8', // we start slowing down requests when we reach 80% of our max limit for the current interval
+  SERVER_SLOW_DOWN_DELAY_MS: '500', // default to slowing down each request by 500ms
+  CACHE_ENABLED: 'true',
+  CACHE_TYPE: 'local',
+  CACHE_MAX_AGE: '90000', // 1.5 minutes
+  CACHE_MIN_AGE: '30000',
+  CACHE_MAX_ITEMS: '1000',
+  CACHE_UPDATE_AGE_ON_GET: 'false',
+  CACHE_REDIS_CONNECTION_TIMEOUT: '15000', // Timeout per long lived connection (ms)
+  CACHE_REDIS_HOST: '127.0.0.1', // IP address of the Redis server
+  CACHE_REDIS_MAX_QUEUED_ITEMS: '100', // Maximum length of the client's internal command queue
+  CACHE_REDIS_MAX_RECONNECT_COOLDOWN: '3000', // Max cooldown time before attempting to reconnect (ms)
+  CACHE_REDIS_PORT: '6379', // Port of the Redis server
+  CACHE_REDIS_TIMEOUT: '500', // Timeout per request (ms)
+  RATE_LIMIT_ENABLED: 'true',
+  WARMUP_ENABLED: 'true',
+  WARMUP_UNHEALTHY_THRESHOLD: '3',
+  WARMUP_SUBSCRIPTION_TTL: '3600000', // default 1h
+  REQUEST_COALESCING_INTERVAL: '100',
+  REQUEST_COALESCING_INTERVAL_MAX: '1000',
+  REQUEST_COALESCING_INTERVAL_COEFFICIENT: '2',
+  REQUEST_COALESCING_ENTROPY_MAX: '0',
+  REQUEST_COALESCING_MAX_RETRIES: '5',
+  WS_ENABLED: 'false',
+  WS_CONNECTION_KEY: '1',
+  WS_CONNECTION_LIMIT: '1',
+  WS_CONNECTION_TTL: '70000',
+  WS_CONNECTION_RETRY_LIMIT: '3',
+  WS_CONNECTION_RETRY_DELAY: '1000',
+  WS_SUBSCRIPTION_LIMIT: '10',
+  WS_SUBSCRIPTION_TTL: '120000',
+  WS_SUBSCRIPTION_UNRESPONSIVE_TTL: '120000',
+  DEFAULT_WS_HEARTBEAT_INTERVAL: '30000',
+}
 
 export const isObject = (o: unknown): boolean =>
   o !== null && typeof o === 'object' && Array.isArray(o) === false
@@ -11,15 +69,18 @@ export const isObject = (o: unknown): boolean =>
 export const isArray = (o: unknown): boolean =>
   o !== null && typeof o === 'object' && Array.isArray(o)
 
-export const parseBool = (value: any): boolean => {
+export const parseBool = (value: unknown): boolean => {
+  if (value === true) return true
   if (!value) return false
-  const _val = value.toString().toLowerCase()
-  return (_val === 'true' || _val === 'false') && _val === 'true'
+  if (!isString(value) && !isNumber(value)) return false
+
+  const str = `${value}`.toUpperCase().trim()
+  return !['FALSE', 'NO', '0'].includes(str)
 }
 
 // convert string values into Numbers where possible (for incoming query strings)
-export const toObjectWithNumbers = (obj: any) => {
-  const toNumber = (v: any) => (isNaN(v) ? v : Number(v))
+export const toObjectWithNumbers = (obj: Record<string, unknown>): Record<string, unknown> => {
+  const toNumber = (v: unknown) => (isNaN(Number(v)) ? v : Number(v))
   return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, toNumber(v)]))
 }
 
@@ -48,9 +109,6 @@ export const uuid = (): string => {
   return process.env.UUID
 }
 
-export const delay = (ms: number): Promise<number> =>
-  new Promise((resolve) => setTimeout(resolve, ms))
-
 /**
  * Return a value used for exponential backoff in milliseconds.
  * @example
@@ -63,8 +121,12 @@ export const delay = (ms: number): Promise<number> =>
  * @param max The maximum back-off in ms
  * @param coefficient The base multiplier
  */
-export const exponentialBackOffMs = (retryCount = 1, interval = 100, max = 1000, coefficient = 2) =>
-  Math.min(max, interval * coefficient ** (retryCount - 1))
+export const exponentialBackOffMs = (
+  retryCount = 1,
+  interval = 100,
+  max = 1000,
+  coefficient = 2,
+): number => Math.min(max, interval * coefficient ** (retryCount - 1))
 
 export const getWithCoalescing = async ({
   get,
@@ -76,7 +138,7 @@ export const getWithCoalescing = async ({
   isInFlight: (retryCount: number) => Promise<boolean>
   retries: number
   interval: (retryCount: number) => number
-}) => {
+}): Promise<CacheEntry | undefined> => {
   const _self = async (_retries: number): Promise<undefined | CacheEntry> => {
     if (_retries === 0) return
     const retryCount = retries - _retries + 1
@@ -84,7 +146,7 @@ export const getWithCoalescing = async ({
     if (entry) return entry
     const inFlight = await isInFlight(retryCount)
     if (!inFlight) return
-    await delay(interval(retryCount))
+    await sleep(interval(retryCount))
     return await _self(_retries - 1)
   }
   return await _self(retries)
@@ -100,9 +162,27 @@ const getEnvName = (name: string, prefix = '') => {
 // Only case-insensitive alphanumeric and underscore (_) are allowed for env vars
 const isEnvNameValid = (name: string) => /^[_a-z0-9]+$/i.test(name)
 
-export const getEnv = (name: string, prefix = ''): string | undefined => {
-  const envVar = process.env[getEnvName(name, prefix)]
-  return envVar === '' ? undefined : envVar
+/**
+ * Get the env var with the given `name`. If the variable is
+ * not present in `process.env`, it will default to the adapter's
+ * `envDefaultOverrides` if adapter's `context` is present, then
+ * `baseEnvDefaults`. In order for `envDefaultOverrides` to override the
+ * base default, the adapter's `context` must be passed into `getEnv`
+ * everywhere that the variable is fetched. See `WS_ENABLED` as an example.
+ * @param name Env var to fetch
+ * @param prefix Prefix for env var (useful when working with composites)
+ * @param context Adapter context to pull `envDefaultOverrides` from
+ * @returns the env var string if found, else undefined
+ */
+export const getEnv = (name: string, prefix = '', context?: AdapterContext): string | undefined => {
+  let envVar = process.env[getEnvName(name, prefix)]
+  if (!envVar || envVar === '') {
+    //@ts-expect-error EnvDefaultOverrides only allows specific string keys, but optional chaining
+    // protects against cases where 'name' is not in EnvDefaultOverrides
+    envVar = context?.envDefaultOverrides?.[name] ?? baseEnvDefaults[name]
+  }
+  if (envVar === '') envVar = undefined
+  return envVar
 }
 
 // Custom error for required env variable.
@@ -188,7 +268,7 @@ export const excludableAdapterRequestProperties: Record<string, true> = [
   'rateLimitMaxAge',
   'metricsMeta',
 ]
-  .concat((process.env.CACHE_KEY_IGNORED_PROPS || '').split(',').filter((k) => k))
+  .concat((getEnv('CACHE_KEY_IGNORED_PROPS') || '').split(',').filter((k) => k))
   .reduce((prev, next) => {
     prev[next] = true
     return prev
@@ -196,7 +276,7 @@ export const excludableAdapterRequestProperties: Record<string, true> = [
 
 /** Common keys within adapter requests that should be used to generate a stable key*/
 export const includableAdapterRequestProperties: string[] = ['data'].concat(
-  (process.env.CACHE_KEY_INCLUDED_PROPS || '').split(',').filter((k) => k),
+  (getEnv('CACHE_KEY_INCLUDED_PROPS') || '').split(',').filter((k) => k),
 )
 
 /** Common keys within adapter requests that should be ignored within "data" to create a stable key*/
@@ -207,11 +287,15 @@ export const excludableInternalAdapterRequestProperties = [
   'includes',
 ]
 
-export const getKeyData = (data: AdapterRequest) =>
-  omit(
+export const getKeyData = (
+  data: AdapterRequest | UnknownWSMessage,
+): Partial<Partial<AdapterRequest | UnknownWSMessage>> => {
+  if (typeof data === 'string') return data
+  return omit(
     pick(data, includableAdapterRequestProperties),
     excludableInternalAdapterRequestProperties.map((property) => `data.${property}`),
   )
+}
 
 export type HashMode = 'include' | 'exclude'
 /**
@@ -226,7 +310,7 @@ export type HashMode = 'include' | 'exclude'
  * @returns string
  */
 export const hash = (
-  data: AdapterRequest,
+  data: AdapterRequest | UnknownWSMessage,
   hashOptions: Required<Parameters<typeof objectHash>>['1'],
   mode: HashMode = 'include',
 ): string => {
@@ -247,31 +331,31 @@ export const getHashOpts = (): Required<Parameters<typeof objectHash>>['1'] => (
 
 // Helper to identify if debug mode is running
 export const isDebug = (): boolean => {
-  return parseBool(process.env.DEBUG) || process.env.NODE_ENV === 'development'
+  return parseBool(getEnv('DEBUG')) || getEnv('NODE_ENV') === 'development'
 }
 
 // Helper to identify if debug log level is set
 export const isDebugLogLevel = (): boolean => {
-  return process.env.LOG_LEVEL === 'debug'
+  return getEnv('LOG_LEVEL') === 'debug'
 }
 
 /**
  * @description Calculates all possible permutations without repetition of a certain size.
  *
- * @param collection A collection of distinct values to calculate the permutations from.
+ * @param object A collection of distinct values to calculate the permutations from.
  * @param n The number of values to combine.
  *
  * @returns Array of permutations
  */
-const permutations = (collection: any, n: any) => {
-  const array = values(collection)
+const permutations = (object: List<string>, n: number) => {
+  const array = values(object)
   if (array.length < n) return []
 
-  const recur = (array: any, n: any) => {
+  const recur = (array: string[], n: number) => {
     if (--n < 0) return [[]]
 
-    const permutations: any[] = []
-    array.forEach((value: any, index: any, array: any) => {
+    const permutations: string[][] = []
+    array.forEach((value, index, array) => {
       array = array.slice()
       array.splice(index, 1)
       recur(array, n).forEach((permutation) => {
@@ -294,7 +378,7 @@ const permutations = (collection: any, n: any) => {
  * @returns Array of permutations
  */
 export const permutator = (options: string[], delimiter?: string): string[] | string[][] => {
-  const output: string[][] = flatMap(options, (_: any, i: any, a: any) => permutations(a, i + 1))
+  const output = flatMap(options, (_, i, a) => permutations(a, i + 1))
   const join = (combos: string[][]) => combos.map((p) => p.join(delimiter))
   return typeof delimiter === 'string' ? join(output) : output
 }
@@ -372,4 +456,161 @@ export const getRequiredEnvWithFallback = (
   }
 
   throw new RequiredEnvError(getEnvName(primary, prefix))
+}
+
+export function isArraylikeAccessor(x: unknown[]): x is [number] {
+  return x.every((i) => typeof i === 'number') && x.length === 1
+}
+
+export function isRecord<T extends Record<string | number | symbol, T[keyof T]>>(
+  value: unknown,
+): value is Record<string | number | symbol, T[keyof T]> {
+  return Object.prototype.toString.call(value) === '[object Object]'
+}
+
+//  URL Encoding
+
+const charsToEncode = {
+  ':': '%3A',
+  '/': '%2F',
+  '?': '%3F',
+  '#': '%23',
+  '[': '%5B',
+  ']': '%5D',
+  '@': '%40',
+  '!': '%21',
+  $: '%24',
+  '&': '%26',
+  "'": '%27',
+  '(': '%28',
+  ')': '%29',
+  '*': '%2A',
+  '+': '%2B',
+  ',': '%2C',
+  ';': '%3B',
+  '=': '%3D',
+  '%': '%25',
+  ' ': '%20',
+  '"': '%22',
+  '<': '%3C',
+  '>': '%3E',
+  '{': '%7B',
+  '}': '%7D',
+  '|': '%7C',
+  '^': '%5E',
+  '`': '%60',
+  '\\': '%5C',
+}
+
+/**
+ * Check whether the given string contains characters in the given whitelist.
+ * @param str The string to check.
+ * @param whitelist The string array of whitelist entries. Returns true if any of these are found in 'str', otherwise returns false.
+ * @returns {boolean}
+ */
+const stringHasWhitelist = (str: string, whitelist: string[]): boolean =>
+  whitelist.some((el) => str.includes(el))
+
+/**
+ * Manually iterate through a given string and replace unsafe/reserved characters with encoded values (unless a character is whitelisted)
+ * @param str The string to encode.
+ * @param whitelist The string array of whitelist entries.
+ * @returns {string}
+ */
+const percentEncodeString = (str: string, whitelist: string[]): string =>
+  str
+    .split('')
+    .map((char) => {
+      const encodedValue = charsToEncode[char as keyof typeof charsToEncode]
+      return encodedValue && !whitelist.includes(char) ? encodedValue : char
+    })
+    .join('')
+
+/**
+ * Build a URL path using the given pathTemplate and params. If a param is found in pathTemplate, it will be inserted there; otherwise, it will be ignored.
+ * eg.) pathTemplate = "/from/:from/to/:to" and params = { from: "ETH", to: "BTC", note: "hello" } will become "/from/ETH/to/BTC"
+ * @param pathTemplate The path template for the URL path. Each param to include in the path should have a prefix of ':'.
+ * @param params The object containing keys & values to be added to the URL path.
+ * @param whitelist The list of characters to whitelist for the URL path (if a param contains one of your whitelisted characters, it will not be encoded).
+ * @returns {string}
+ */
+export const buildUrlPath = (pathTemplate = '', params = {}, whitelist = ''): string => {
+  const allowedChars = whitelist.split('')
+
+  for (const param in params) {
+    const value = params[param as keyof typeof params]
+    if (!value) continue
+
+    // If string contains a whitelisted character: manually replace any non-whitelisted characters with percent encoded values. Otherwise, encode the string as usual.
+    const encodedValue = stringHasWhitelist(value, allowedChars)
+      ? percentEncodeString(value, allowedChars)
+      : encodeURIComponent(value)
+
+    pathTemplate = pathTemplate.replace(`:${param}`, encodedValue)
+  }
+
+  return pathTemplate
+}
+
+/**
+ * Build a full URL using the given baseUrl, pathTemplate and params. Uses buildUrlPath to add path & params.
+ * @param baseUrl The base URL to add the pathTemplate & params to.
+ * @param pathTemplate The path template for the URL path. Leave empty if only searchParams are required.
+ * @param params The object containing keys & values to be added to the URL path.
+ * @param whitelist The list of characters to whitelist for the URL path.
+ * @returns {string}
+ */
+export const buildUrl = (baseUrl: string, pathTemplate = '', params = {}, whitelist = ''): string =>
+  new URL(buildUrlPath(pathTemplate, params, whitelist), baseUrl).toString()
+
+//  URL Encoding
+
+let unhandledRejectionHandlerRegistered = false
+
+/**
+ * Adapters use to run with Node 14, which by default didn't crash when a rejected promised bubbled up to the top.
+ * This function registers a global handler to catch those rejections and just log them to console.
+ */
+export const registerUnhandledRejectionHandler = (): void => {
+  if (unhandledRejectionHandlerRegistered) {
+    if (getEnv('NODE_ENV') !== 'test')
+      logger.warn('UnhandledRejectionHandler attempted to be registered more than once')
+    return
+  }
+
+  unhandledRejectionHandlerRegistered = true
+  process.on('unhandledRejection', (reason) => {
+    logger.warn('Unhandled promise rejection reached custom handler')
+    logger.warn(JSON.stringify(reason))
+  })
+}
+
+/**
+ * Sleeps for the provided number of milliseconds
+ * @param ms The number of milliseconds to sleep for
+ * @returns a Promise that resolves once the specified time passes
+ */
+export const sleep = (ms: number): Promise<void> => {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Remove stale request entries from an array.
+ * This function assumes that the array is sorted by timestamp,
+ * where the oldest entry lives in the 0th index, and the newest entry
+ * lives in the arr.length-1th index
+ * @param items The items to filter
+ * @param filter The windowing function to apply
+ */
+export function sortedFilter<T>(items: T[], windowingFunction: (item: T) => boolean): T[] {
+  // if we want a higher performance implementation
+  // we can later resort to a custom array class that is circular
+  // so we can amortize expensive operations like resizing, and make
+  // operations like moving the head index much quicker
+  const firstNonStaleItemIndex = items.findIndex(windowingFunction)
+  if (firstNonStaleItemIndex === -1) {
+    return []
+  }
+
+  return items.slice(firstNonStaleItemIndex)
 }

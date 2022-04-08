@@ -11,10 +11,15 @@ import {
   Store,
 } from 'redux'
 import { composeWithDevTools } from 'remote-redux-devtools'
+import { getEnv } from '../util'
 
 export const asAction =
   <T>() =>
-  (p: T) => ({
+  (
+    p: T,
+  ): {
+    payload: ActionBase & T
+  } => ({
     payload: toActionPayload<T>(p),
   })
 
@@ -29,22 +34,21 @@ export interface ActionBase {
   createdAt: string
 }
 
-export function configureStore(
-  rootReducer: Reducer,
-  preloadedState: PreloadedState<any> = {},
-  middleware: Middleware<unknown, any, Dispatch<AnyAction>>[] = [],
+export function configureStore<State>(
+  rootReducer: Reducer<State>,
+  preloadedState: PreloadedState<State> = {},
+  middleware: Middleware<unknown, State, Dispatch<AnyAction>>[] = [],
 ): Store {
   const middlewareEnhancer = applyMiddleware(...middleware)
 
-  const enhancers = [middlewareEnhancer]
-  const composedEnhancers: any =
-    process.env.NODE_ENV === 'development'
+  const composedEnhancers =
+    getEnv('NODE_ENV') === 'development'
       ? composeWithDevTools({
           realtime: true,
           port: 8000,
           actionsBlacklist: ['WS/MESSAGE_RECEIVED'],
-        })(...(enhancers as any))
-      : compose(...enhancers)
+        })(middlewareEnhancer)
+      : compose(middlewareEnhancer)
 
   // Create a store with the root reducer function being the one exposed by the manager.
   return createStore(rootReducer, preloadedState, composedEnhancers)

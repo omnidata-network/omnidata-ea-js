@@ -1,4 +1,4 @@
-import { Middleware } from '@chainlink/types'
+import type { AdapterContext, AdapterRequest, Middleware } from '../../../types'
 import { Store } from 'redux'
 import {
   BurstLimitState,
@@ -9,20 +9,20 @@ import {
 import * as actions from './actions'
 import { WARMUP_BATCH_REQUEST_ID } from '../cache-warmer/config'
 import { AdapterError, logger } from '../../modules'
+import { sleep } from '../../util'
 
 export * as actions from './actions'
 export * as reducer from './reducer'
 
-const SECOND_LIMIT_RETRIES = 10
-const MINUTE_LIMIT_WARMER_BUFFER = 0.9
-
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+export const SECOND_LIMIT_RETRIES = 10
+export const MINUTE_LIMIT_WARMER_BUFFER = 0.9
 
 const availableSecondLimitCapacity = async (
   store: Store<BurstLimitState>,
   burstCapacity1s: number,
 ) => {
   for (let retry = SECOND_LIMIT_RETRIES; retry > 0; retry--) {
+    store.dispatch(actions.updateIntervals())
     const state = store.getState()
     const { requests }: { requests: RequestsState } = state
 
@@ -32,37 +32,27 @@ const availableSecondLimitCapacity = async (
       logger.debug(
         `Per Second Burst rate limit cap of ${burstCapacity1s} reached. ${observedRequestsInSecond} requests sent in the last minute. Waiting 1 second. Retry number: ${retry}`,
       )
-      await delay(1000)
+      await sleep(1000)
     } else return true
   }
   return false
 }
 
+/**
+  Prevents Adapters from requesting a data provider more times than their **second** and **minute** API limits allow.
+*/
 export const withBurstLimit =
-  (store?: Store<BurstLimitState>): Middleware =>
+  <R extends AdapterRequest, C extends AdapterContext>(
+    store?: Store<BurstLimitState>,
+  ): Middleware<R, C> =>
   async (execute, context) =>
   async (input) => {
-    const config = context.rateLimit ?? {}
-    if (!store || !config.enabled || (!config.burstCapacity1m && !config.burstCapacity1s))
+    const config = context.limits
+    if (!store || !config?.enabled || (!config.burstCapacity1m && !config.burstCapacity1s))
       return await execute(input, context)
 
     const state = store.getState()
     const { requests }: { requests: RequestsState } = state
-
-    // Limit by Second
-    if (config.burstCapacity1s) {
-      const availableCapacity = availableSecondLimitCapacity(store, config.burstCapacity1s)
-      if (!availableCapacity) {
-        logger.warn(
-          `External Adapter backing off. Provider's limit of ${config.burstCapacity1s} requests per second reached.`,
-        )
-        throw new AdapterError({
-          jobRunID: input.id,
-          message: 'New request backoff: Second Burst rate limit cap reached.',
-          statusCode: 429,
-        })
-      }
-    }
 
     // Limit by Minute
     if (config.burstCapacity1m) {
@@ -84,6 +74,21 @@ export const withBurstLimit =
         throw new AdapterError({
           jobRunID: input.id,
           message: 'New request backoff: Minute Burst rate limit cap reached.',
+          statusCode: 429,
+        })
+      }
+    }
+
+    // Limit by Second
+    if (config.burstCapacity1s) {
+      const availableCapacity = await availableSecondLimitCapacity(store, config.burstCapacity1s)
+      if (!availableCapacity) {
+        logger.warn(
+          `External Adapter backing off. Provider's burst limit of ${config.burstCapacity1s} requests per second reached.`,
+        )
+        throw new AdapterError({
+          jobRunID: input.id,
+          message: 'New request backoff: Second Burst rate limit cap reached.',
           statusCode: 429,
         })
       }

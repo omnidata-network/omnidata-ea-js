@@ -1,24 +1,15 @@
 import { timeout, TimeoutError } from 'promise-timeout'
-import { createClient } from 'redis'
-// TODO https://app.shortcut.com/chainlinklabs/story/23811/update-redis-client-types-and-imports
-import { RedisClientOptions } from '@node-redis/client/dist/lib/client' //TODO add RedisClientType here
-import { RedisModules, RedisScripts } from '@node-redis/client/dist/lib/commands'
+import {
+  createClient,
+  RedisModules,
+  RedisScripts,
+  RedisClientType,
+  RedisClientOptions,
+} from '@node-redis/client'
 import { logger } from '../../../modules'
-import { CacheEntry } from '../types'
+import type { ICache, CacheEntry } from '../types'
 import * as metrics from './metrics'
-
-const DEFAULT_CACHE_REDIS_HOST = '127.0.0.1' // IP address of the Redis server
-const DEFAULT_CACHE_REDIS_PORT = 6379 // Port of the Redis server
-const DEFAULT_CACHE_REDIS_PATH = undefined // The UNIX socket string of the Redis server
-const DEFAULT_CACHE_REDIS_URL = undefined // The URL of the Redis server
-const DEFAULT_CACHE_REDIS_PASSWORD = undefined // The password required for redis auth
-const DEFAULT_CACHE_REDIS_CONNECTION_TIMEOUT = 15 * 1000 // Timeout per long lived connection (ms)
-const DEFAULT_CACHE_REDIS_MAX_RECONNECT_COOLDOWN = 3 * 1000 // Max cooldown time before attempting to reconnect (ms)
-const DEFAULT_CACHE_REDIS_REQUEST_TIMEOUT = 500 // Timeout per request (ms)
-const DEFAULT_CACHE_MAX_AGE = 90 * 1000 // 1.5 minutes
-const DEFAULT_CACHE_REDIS_MAX_QUEUED_ITEMS = 100 // Maximum length of the client's internal command queue
-
-const env = process.env
+import { getEnv } from '../../../util'
 
 export type RedisOptions = RedisClientOptions<RedisModules, RedisScripts> & {
   maxAge: number
@@ -30,28 +21,22 @@ export const defaultOptions = (): RedisOptions => {
   const options: RedisOptions = {
     type: 'redis',
     socket: {
-      host: env.CACHE_REDIS_HOST || DEFAULT_CACHE_REDIS_HOST,
-      port: Number(env.CACHE_REDIS_PORT) || DEFAULT_CACHE_REDIS_PORT,
-      path: env.CACHE_REDIS_PATH || DEFAULT_CACHE_REDIS_PATH,
+      host: getEnv('CACHE_REDIS_HOST'),
+      port: Number(getEnv('CACHE_REDIS_PORT')),
+      path: getEnv('CACHE_REDIS_PATH'),
       reconnectStrategy: (retries: number): number => {
         metrics.redis_retries_count.inc()
         logger.warn(`Redis reconnect attempt #${retries}`)
-        return Math.min(
-          retries * 100,
-          Number(env.CACHE_REDIS_MAX_RECONNECT_COOLDOWN) ||
-            DEFAULT_CACHE_REDIS_MAX_RECONNECT_COOLDOWN,
-        ) // Next reconnect attempt time
+        return Math.min(retries * 100, Number(getEnv('CACHE_REDIS_MAX_RECONNECT_COOLDOWN'))) // Next reconnect attempt time
       },
-      connectTimeout:
-        Number(env.CACHE_REDIS_CONNECTION_TIMEOUT) || DEFAULT_CACHE_REDIS_CONNECTION_TIMEOUT,
+      connectTimeout: Number(getEnv('CACHE_REDIS_CONNECTION_TIMEOUT')),
     },
-    password: env.CACHE_REDIS_PASSWORD || DEFAULT_CACHE_REDIS_PASSWORD,
-    commandsQueueMaxLength:
-      Number(env.CACHE_REDIS_MAX_QUEUED_ITEMS) || DEFAULT_CACHE_REDIS_MAX_QUEUED_ITEMS,
-    maxAge: Number(env.CACHE_MAX_AGE) || DEFAULT_CACHE_MAX_AGE,
-    timeout: Number(env.CACHE_REDIS_TIMEOUT) || DEFAULT_CACHE_REDIS_REQUEST_TIMEOUT,
+    password: getEnv('CACHE_REDIS_PASSWORD'),
+    commandsQueueMaxLength: Number(getEnv('CACHE_REDIS_MAX_QUEUED_ITEMS')),
+    maxAge: Number(getEnv('CACHE_MAX_AGE')),
+    timeout: Number(getEnv('CACHE_REDIS_TIMEOUT')),
   }
-  const cacheRedisURL = env.CACHE_REDIS_URL || DEFAULT_CACHE_REDIS_URL
+  const cacheRedisURL = getEnv('CACHE_REDIS_URL')
   if (cacheRedisURL) options.url = cacheRedisURL
   return options
 }
@@ -63,10 +48,9 @@ export const redactOptions = (opts: RedisOptions): RedisOptions => {
   return opts
 }
 
-export class RedisCache {
+export class RedisCache implements ICache {
   options: RedisOptions
-  client: any //TODO https://app.shortcut.com/chainlinklabs/story/23811/update-redis-client-types-and-imports
-
+  client: RedisClientType<RedisModules, RedisScripts>
   constructor(options: RedisOptions) {
     logger.info('Creating new redis client instance...')
 
@@ -84,14 +68,14 @@ export class RedisCache {
     this.client = client
   }
 
-  static async build(options: RedisOptions) {
+  static async build(options: RedisOptions): Promise<RedisCache> {
     metrics.redis_connections_open.inc()
     const cache = new RedisCache(options)
     await cache.client.connect()
     return cache
   }
 
-  async setResponse(key: string, value: CacheEntry, maxAge: number) {
+  async setResponse(key: string, value: CacheEntry, maxAge: number): Promise<string | null> {
     const entry = JSON.stringify(value)
     return await this.contextualTimeout(
       this.client.set(key, entry, { PX: maxAge }),
@@ -104,7 +88,7 @@ export class RedisCache {
     )
   }
 
-  async setFlightMarker(key: string, maxAge: number) {
+  async setFlightMarker(key: string, maxAge: number): Promise<string | null> {
     return this.contextualTimeout(this.client.set(key, 'true', { PX: maxAge }), 'setFlightMarker', {
       key,
       maxAge,
@@ -112,19 +96,20 @@ export class RedisCache {
   }
 
   async getResponse(key: string): Promise<CacheEntry | undefined> {
-    const entry: string = await this.contextualTimeout(this.client.get(key), 'getResponse', { key })
+    const entry = await this.contextualTimeout(this.client.get(key), 'getResponse', { key })
+    if (!entry) return
     return JSON.parse(entry)
   }
 
   async getFlightMarker(key: string): Promise<boolean> {
-    const entry: string = await this.contextualTimeout(this.client.get(key), 'getFlightMarker', {
+    const entry = await this.contextualTimeout(this.client.get(key), 'getFlightMarker', {
       key,
     })
-
-    return JSON.parse(entry)
+    if (!entry) return false
+    return !!JSON.parse(entry)
   }
 
-  async del(key: string) {
+  async del(key: string): Promise<number> {
     return this.contextualTimeout(this.client.del(key), 'del', { key })
   }
 
@@ -155,7 +140,11 @@ export class RedisCache {
     }
   }
 
-  async contextualTimeout(promise: Promise<any>, fnName: string, context: Record<string, any>) {
+  async contextualTimeout<ReturnType>(
+    promise: Promise<ReturnType>,
+    fnName: string,
+    context: Record<string, unknown>,
+  ): Promise<ReturnType> {
     try {
       const result = await timeout(promise, this.options.timeout)
       metrics.redis_commands_sent_count

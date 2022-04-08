@@ -1,98 +1,67 @@
-import {
+import type {
   AdapterContext,
+  AdapterData,
   AdapterRequest,
   AdapterResponse,
   Execute,
   Middleware,
-} from '@chainlink/types'
+} from '../../../types'
 import { logger } from '../../modules'
 import { Store } from 'redux'
 import { reducer } from '../burst-limit'
 import { withBurstLimit } from '../burst-limit'
 import {
-  delay,
   exponentialBackOffMs,
+  getEnv,
   getHashOpts,
   getWithCoalescing,
   parseBool,
   uuid,
   hash,
+  sleep,
 } from '../../util'
-import { getMaxAgeOverride, getTTL } from './ttl'
+import { getMaxAgeOverride, getTTL } from './utils'
 import * as local from './local'
-import { LocalOptions } from './local'
-import * as metrics from './metrics'
 import * as redis from './redis'
-import { CacheEntry } from './types'
+import * as metrics from './metrics'
+import * as types from './types'
 
-const env = process.env
-
-export const DEFAULT_CACHE_ENABLED = true
-const DEFAULT_CACHE_TYPE = 'local'
 const DEFAULT_CACHE_KEY_GROUP = uuid()
-// Request coalescing
-const DEFAULT_RC_INTERVAL = 100
-const DEFAULT_RC_INTERVAL_MAX = 1000
-const DEFAULT_RC_INTERVAL_COEFFICIENT = 2
-const DEFAULT_RC_ENTROPY_MAX = 0
-const DEFAULT_RC_MAX_RETRIES = 5
 
-export const MINIMUM_AGE = 1000 * 60 * 0.5 // 30 seconds
-
-export type Cache = redis.RedisCache | local.LocalLRUCache
-
-export interface CacheOptions {
-  instance?: Cache
-  enabled: boolean
-  cacheImplOptions: local.LocalOptions | redis.RedisOptions
-  cacheBuilder: (options: CacheImplOptions) => Promise<redis.RedisCache | local.LocalLRUCache>
-  key: {
-    group: string
-  }
-  requestCoalescing: {
-    enabled: boolean
-    interval: number
-    intervalMax: number
-    intervalCoefficient: number
-    entropyMax: number
-    maxRetries: number
-  }
-  minimumAge: number
-}
-
-export const defaultOptions = (shouldUseLocal?: boolean): CacheOptions => {
+export const defaultOptions = (
+  shouldUseLocal?: boolean,
+  adapterContext?: AdapterContext,
+): types.CacheOptions => {
   return {
-    enabled: parseBool(env.CACHE_ENABLED ?? DEFAULT_CACHE_ENABLED),
+    enabled: parseBool(getEnv('CACHE_ENABLED', undefined, adapterContext)),
     cacheImplOptions: shouldUseLocal ? local.defaultOptions() : defaultCacheImplOptions(),
     cacheBuilder: defaultCacheBuilder(),
     key: {
-      group: env.CACHE_KEY_GROUP || DEFAULT_CACHE_KEY_GROUP,
+      group: getEnv('CACHE_KEY_GROUP') || DEFAULT_CACHE_KEY_GROUP,
     },
     // Request coalescing
     requestCoalescing: {
-      enabled: parseBool(env.REQUEST_COALESCING_ENABLED),
+      enabled: parseBool(getEnv('REQUEST_COALESCING_ENABLED')),
       // Capped linear back-off: 100, 200, 400, 800, 1000..
-      interval: Number(env.REQUEST_COALESCING_INTERVAL) || DEFAULT_RC_INTERVAL,
-      intervalMax: Number(env.REQUEST_COALESCING_INTERVAL_MAX) || DEFAULT_RC_INTERVAL_MAX,
-      intervalCoefficient:
-        Number(env.REQUEST_COALESCING_INTERVAL_COEFFICIENT) || DEFAULT_RC_INTERVAL_COEFFICIENT,
+      interval: Number(getEnv('REQUEST_COALESCING_INTERVAL')),
+      intervalMax: Number(getEnv('REQUEST_COALESCING_INTERVAL_MAX')),
+      intervalCoefficient: Number(getEnv('REQUEST_COALESCING_INTERVAL_COEFFICIENT')),
       // Add entropy to absorb bursts
-      entropyMax: Number(env.REQUEST_COALESCING_ENTROPY_MAX) || DEFAULT_RC_ENTROPY_MAX,
-      maxRetries: Number(env.REQUEST_COALESCING_MAX_RETRIES) || DEFAULT_RC_MAX_RETRIES,
+      entropyMax: Number(getEnv('REQUEST_COALESCING_ENTROPY_MAX')),
+      maxRetries: Number(getEnv('REQUEST_COALESCING_MAX_RETRIES')),
     },
-    minimumAge: Number(env.CACHE_MIN_AGE) || MINIMUM_AGE,
+    minimumAge: Number(getEnv('CACHE_MIN_AGE')),
   }
 }
 
-export type CacheImplOptions = LocalOptions | redis.RedisOptions
-const defaultCacheImplOptions = (): CacheImplOptions => {
-  const type = env.CACHE_TYPE || DEFAULT_CACHE_TYPE
+const defaultCacheImplOptions = (): types.CacheImplOptions => {
+  const type = getEnv('CACHE_TYPE')
   const options = type === 'redis' ? redis.defaultOptions() : local.defaultOptions()
   return options
 }
 
 const defaultCacheBuilder = () => {
-  return async (options: CacheImplOptions) => {
+  return async (options: types.CacheImplOptions) => {
     switch (options.type) {
       case 'redis': {
         return await redis.RedisCache.build(options as redis.RedisOptions)
@@ -105,7 +74,7 @@ const defaultCacheBuilder = () => {
 }
 
 // Options without sensitive data
-export const redactOptions = (options: CacheOptions): CacheOptions => ({
+export const redactOptions = (options: types.CacheOptions): types.CacheOptions => ({
   ...options,
   cacheImplOptions:
     options.cacheImplOptions.type === 'redis'
@@ -114,8 +83,8 @@ export const redactOptions = (options: CacheOptions): CacheOptions => ({
 })
 
 export class AdapterCache {
-  private readonly options: CacheOptions
-  private cache: Cache
+  private readonly options: types.CacheOptions
+  private cache: types.Cache
   private hashOptions = getHashOpts()
 
   constructor(context: AdapterContext) {
@@ -133,7 +102,7 @@ export class AdapterCache {
     return `${this.options.key.group}:${hash(data, this.hashOptions)}`
   }
 
-  public get instance(): Cache {
+  public get instance(): types.Cache {
     return this.cache
   }
 
@@ -153,7 +122,7 @@ export class AdapterCache {
     logger.debug(`Request coalescing: DEL ${key}`)
   }
 
-  public getWithCoalescing(key: string): Promise<undefined | CacheEntry> {
+  public getWithCoalescing(key: string): Promise<undefined | types.CacheEntry> {
     return getWithCoalescing({
       get: async (retryCount: number) => {
         const entry = await this.cache.getResponse(key)
@@ -165,7 +134,7 @@ export class AdapterCache {
           // Add some entropy here because of possible scenario where the key won't be set before multiple
           // other instances in a burst request try to access the coalescing key.
           const randomMs = Math.random() * this.options.requestCoalescing.entropyMax
-          await delay(randomMs)
+          await sleep(randomMs)
         }
         const inFlight = await this.cache.getFlightMarker(this.getCoalescingKey(key))
         logger.debug(`Request coalescing: CHECK inFlight:${inFlight} on retry #${retryCount}`)
@@ -232,14 +201,14 @@ export class AdapterCache {
   }
 }
 
-const handleFailedCacheRead = async (
-  adapterRequest: AdapterRequest,
-  context: AdapterContext,
+const handleFailedCacheRead = async <R extends AdapterRequest, C extends AdapterContext>(
+  adapterRequest: R,
+  context: C,
   error: Error,
-  execute: Execute,
+  execute: Execute<R, C>,
   adapterCache: AdapterCache,
 ): Promise<AdapterResponse | undefined> => {
-  const type = env.CACHE_TYPE || DEFAULT_CACHE_TYPE
+  const type = getEnv('CACHE_TYPE')
   if (type === 'local') {
     logger.warn('Cache type already set to local.  Passing through...')
     return await execute(adapterRequest, context)
@@ -256,12 +225,13 @@ const handleFailedCacheRead = async (
 export const buildDefaultLocalAdapterCache = async (
   context: AdapterContext,
 ): Promise<AdapterCache> => {
-  const options = defaultOptions(true)
+  const options = defaultOptions(true, context)
   options.instance = await options.cacheBuilder(options.cacheImplOptions)
 
   return new AdapterCache({
     ...context,
     cache: {
+      ...options,
       ...context.cache,
       instance: options.instance,
     },
@@ -269,10 +239,12 @@ export const buildDefaultLocalAdapterCache = async (
 }
 
 export const withCache =
-  (rateLimit?: Store<reducer.BurstLimitState>): Middleware =>
-  async (execute, context: AdapterContext) => {
+  <D extends AdapterData = AdapterData, C extends AdapterContext = AdapterContext>(
+    rateLimit?: Store<reducer.BurstLimitState>,
+  ): Middleware<AdapterRequest<D>, C> =>
+  async (execute, context) => {
     // If disabled noop
-    if (!context?.cache?.instance) return (data: AdapterRequest) => execute(data, context)
+    if (!context?.cache?.instance) return (data) => execute(data, context)
 
     const adapterCache = new AdapterCache(context)
     const localAdapterCache = await buildDefaultLocalAdapterCache(context)
@@ -326,7 +298,7 @@ export const withCache =
       )
       if (inFlightMarkerResponse) return inFlightMarkerResponse
 
-      const burstRateLimit = withBurstLimit(rateLimit)
+      const burstRateLimit = withBurstLimit<AdapterRequest<D>, C>(rateLimit)
       const executeWithBackoff = await burstRateLimit(execute, context)
       const result = await executeWithBackoff(adapterRequest, context)
 
@@ -342,7 +314,7 @@ export const withCache =
             const debugBatchablePropertyPath = debug
               ? { batchablePropertyPath: debug.batchablePropertyPath }
               : {}
-            const entry: CacheEntry = {
+            const entry: types.CacheEntry = {
               statusCode,
               data,
               result,
@@ -365,7 +337,7 @@ export const withCache =
                   : {}
                 const entryBatchParticipant = {
                   statusCode,
-                  data: { result },
+                  data: { result, statusCode: 200 },
                   result,
                   maxAge,
                   debug: debugBatchablePropertyPath,
@@ -391,3 +363,5 @@ export const withCache =
       }
     }
   }
+
+export default { Cache: AdapterCache, withCache, types }

@@ -1,48 +1,40 @@
-import {
+import type {
   AdapterErrorResponse,
+  BatchedResult,
   AdapterResponse,
-  RequestConfig,
+  AxiosRequestConfig,
   AdapterRequest,
-  AdapterRequestData,
   ResultPath,
-} from '@chainlink/types'
-import { reducer } from '../middleware/cache-warmer'
+  BatchableProperty,
+} from '../../types'
 import axios, { AxiosResponse } from 'axios'
-import { deepType } from '../util'
+import { deepType, getEnv, sleep, isArraylikeAccessor, isRecord } from '../util'
 import { getDefaultConfig, logConfig } from '../config'
 import { AdapterError } from './error'
 import { logger } from './logger'
 import objectPath from 'object-path'
 import { join } from 'path'
 
-const getFalse = () => false
-
-const DEFAULT_RETRY = 1
+type CustomError<T = unknown> = (data: T) => boolean
+const defaultCustomError = () => false
 
 export class Requester {
-  static async request<T extends AdapterRequestData>(
-    config: RequestConfig,
-    customError?: any,
-    retries = Number(process.env.RETRY) || DEFAULT_RETRY,
+  static async request<T>(
+    config: AxiosRequestConfig,
+    customError = defaultCustomError as CustomError<T>,
+    retries = Number(getEnv('RETRY')),
     delay = 1000,
   ): Promise<AxiosResponse<T>> {
     if (typeof config === 'string') config = { url: config }
     if (typeof config.timeout === 'undefined') {
-      const timeout = Number(process.env.TIMEOUT)
+      const timeout = Number(getEnv('TIMEOUT'))
       config.timeout = !isNaN(timeout) ? timeout : 3000
-    }
-
-    if (!customError) customError = getFalse
-    if (typeof customError !== 'function') {
-      delay = retries
-      retries = customError
-      customError = getFalse
     }
 
     const _retry = async (n: number): Promise<AxiosResponse<T>> => {
       const _delayRetry = async (message: string) => {
         logger.warn(message)
-        await new Promise((resolve) => setTimeout(resolve, delay))
+        await sleep(delay)
         return await _retry(n - 1)
       }
 
@@ -52,6 +44,19 @@ export class Requester {
         response = await axios(config)
       } catch (error) {
         // Request error
+        if (error.code === 'ECONNABORTED') {
+          // Axios timeout code
+          throw new AdapterError({
+            statusCode: 504,
+            name: 'Request Timeout error',
+            providerStatusCode: error?.response?.status ?? 504,
+            message: error?.message,
+            cause: error,
+            errorResponse: error?.response?.data?.error,
+            url,
+          })
+        }
+
         if (n === 1) {
           throw new AdapterError({
             statusCode: 200,
@@ -66,16 +71,17 @@ export class Requester {
         return await _delayRetry(`Caught error. Retrying: ${JSON.stringify(error.message)}`)
       }
 
-      if (response.data.error || customError(response.data)) {
+      if (response.data && customError && customError(response.data)) {
         // Response error
         if (n === 1) {
           const message = `Could not retrieve valid data: ${JSON.stringify(response.data)}`
-          const cause = response.data.error || 'customError'
           throw new AdapterError({
             statusCode: 200,
-            providerStatusCode: response.data.error?.code ?? response.status,
+            providerStatusCode:
+              (response.data as unknown as { error: { code: number } }).error?.code ??
+              response.status,
             message,
-            cause,
+            cause: 'Data Provider error',
             url,
           })
         }
@@ -97,31 +103,62 @@ export class Requester {
     return await _retry(retries)
   }
 
-  static validateResultNumber(
-    data: { [key: string]: any },
-    path: ResultPath,
+  static validateResultNumber<T extends unknown>(
+    data: T,
+    path?: ResultPath,
     options?: { inverse?: boolean },
   ): number {
-    const result = this.getResult(data, path)
-    if (typeof result === 'undefined') {
-      const message = 'Result could not be found in path'
+    const result = path ? this.getResult(data, path) : data
+
+    if (typeof result === 'undefined' || result === null) {
+      const message = 'Result could not be found in path or is empty'
       logger.error(message, { data, path })
-      throw new AdapterError({ message })
+      throw new AdapterError({
+        message,
+        statusCode: 502,
+      })
     }
+
     if (Number(result) === 0 || isNaN(Number(result))) {
       const message = 'Invalid result received'
       logger.error(message, { data, path })
-      throw new AdapterError({ message })
+      throw new AdapterError({
+        message,
+        statusCode: 400,
+      })
     }
     const num = Number(result)
-    if (options?.inverse && num != 0) {
-      return 1 / num
-    }
+    if (options?.inverse && num != 0) return 1 / num
     return num
   }
 
-  static getResult(data: { [key: string]: unknown }, path: ResultPath): unknown {
+  static getResult<T extends unknown>(data: T, path: ResultPath): unknown {
+    if (
+      (typeof data === 'string' || Array.isArray(data)) &&
+      Array.isArray(path) &&
+      isArraylikeAccessor(path)
+    )
+      return this.getResultFromArraylike(data, path)
+
+    if (isRecord(data)) return this.getResultFromObject(data, path)
+
+    const message = 'Invalid validateResultNumber usage'
+    logger.error(message, { data, path })
+    throw new AdapterError({ message })
+  }
+
+  static getResultFromObject<T extends Record<string, T[keyof T]>>(
+    data: T,
+    path: ResultPath,
+  ): unknown {
     return objectPath.get(data, path)
+  }
+
+  static getResultFromArraylike<T extends string | ArrayLike<unknown>>(
+    data: T,
+    path: [number],
+  ): unknown {
+    return data[path[0]]
   }
 
   /**
@@ -131,18 +168,22 @@ export class Requester {
    * @param results (optional) a group of results from a batch request
    */
 
-  static withResult<T>(
+  static withResult<T extends Record<string, unknown> | unknown>(
     response: AxiosResponse<T>,
     result?: number | string,
     results?: [AdapterRequest, number][],
-  ): AxiosResponseWithLiftedResult<T> | AxiosResponseWithPayloadAndLiftedResult<T> {
+  ): AxiosReponseWithResult<T> {
     const isObj = deepType(response.data) === 'object'
-    const output = isObj
-      ? (response as AxiosResponseWithLiftedResult<T>)
-      : ({
-          ...response,
-          data: { payload: response.data },
-        } as AxiosResponseWithPayloadAndLiftedResult<T>)
+    if (isObj) {
+      const output = response as AxiosReponseWithResult<T>
+      if (result) output.data.result = result
+      if (results) output.data.results = results
+      return output
+    }
+    const output = {
+      ...response,
+      data: { payload: response.data },
+    } as AxiosReponseWithResult<T>
     if (result) output.data.result = result
     if (results) output.data.results = results
     return output
@@ -183,7 +224,7 @@ export class Requester {
     jobRunID = '1',
     response: Partial<AxiosResponse>,
     verbose = false,
-    batchablePropertyPath?: reducer.BatchableProperty[],
+    batchablePropertyPath?: BatchableProperty[],
   ): AdapterResponse {
     const debug = batchablePropertyPath ? { batchablePropertyPath } : undefined
 
@@ -227,31 +268,6 @@ interface SingleResult {
 }
 
 /**
- * Contained within the body of an api response
- * from a request that asked for multiple data points
- *
- * @example Request Parameters
- * ```
- * {
- *  "data": {
- *      "base": "ETH,BTC",
- *      "quote": "USD"
- *   }
- *}
- * ```
- */
-interface BatchedResult {
-  /**
-   * Tuples for
-   * [
-   *    its input parameters as a single request (used in caching),
-   *    its result
-   * ]
-   */
-  results?: [AdapterRequest, number][]
-}
-
-/**
  * A lifted result is derived from a raw response,
  * where the response payload will be slightly normalized,
  * "lifting" nested data into the root object
@@ -287,3 +303,10 @@ type AxiosResponseWithLiftedResult<T> = AxiosResponse<T & LiftedResult>
  * The original response data will be store under the key of payload.
  */
 type AxiosResponseWithPayloadAndLiftedResult<T> = AxiosResponse<{ payload: T } & LiftedResult>
+
+type AxiosReponseWithResult<T extends Record<string, unknown> | unknown> = T extends Record<
+  string,
+  unknown
+>
+  ? AxiosResponseWithLiftedResult<T>
+  : AxiosResponseWithPayloadAndLiftedResult<T>

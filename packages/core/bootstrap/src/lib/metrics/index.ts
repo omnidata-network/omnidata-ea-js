@@ -1,21 +1,23 @@
 import * as client from 'prom-client'
-import { parseBool } from '../util'
-import { WARMUP_REQUEST_ID } from '../middleware/cache-warmer/config'
+import { getEnv, parseBool } from '../util'
 import * as util from './util'
-import { Middleware, AdapterRequest, AdapterMetricsMeta } from '@chainlink/types'
+import type { Middleware, AdapterRequest, AdapterMetricsMeta, AdapterContext } from '../../types'
+import { WARMUP_REQUEST_ID } from '../middleware/cache-warmer'
+
+export const METRICS_ENABLED = parseBool(getEnv('EXPERIMENTAL_METRICS_ENABLED'))
 
 export const setupMetrics = (name: string): void => {
   client.collectDefaultMetrics()
   client.register.setDefaultLabels({
-    app_name: process.env.METRICS_NAME || name || 'N/A',
-    app_version: process.env.npm_package_version,
+    app_name: getEnv('METRICS_NAME') || name || 'N/A',
+    app_version: getEnv('npm_package_version'),
   })
 }
 
-export const METRICS_ENABLED = parseBool(process.env.EXPERIMENTAL_METRICS_ENABLED)
-
-export const withMetrics: Middleware =
-  async (execute, context) => async (input: AdapterRequest) => {
+export const withMetrics =
+  <R extends AdapterRequest, C extends AdapterContext>(): Middleware<R, C> =>
+  async (execute, context) =>
+  async (input) => {
     const feedId = util.getFeedId(input)
     const metricsMeta: AdapterMetricsMeta = {
       feedId,
@@ -47,10 +49,7 @@ export const withMetrics: Middleware =
       const result = await execute({ ...input, metricsMeta }, context)
       record({
         statusCode: result.statusCode,
-        type:
-          result.data.maxAge || (result as any).maxAge
-            ? HttpRequestType.CACHE_HIT
-            : HttpRequestType.DATA_PROVIDER_HIT,
+        type: result.data.maxAge ? HttpRequestType.CACHE_HIT : HttpRequestType.DATA_PROVIDER_HIT,
       })
       return { ...result, metricsMeta: { ...result.metricsMeta, ...metricsMeta } }
     } catch (error) {

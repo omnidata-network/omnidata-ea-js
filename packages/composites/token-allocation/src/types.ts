@@ -1,5 +1,4 @@
-import { Config as DefaultConfig } from '@chainlink/types'
-import { BigNumberish } from 'ethers'
+import { Config as BaseConfig, DefaultConfig, BigNumberish } from '@chainlink/ea-bootstrap'
 
 export type TokenAllocation = {
   symbol: string
@@ -23,14 +22,17 @@ export type TokenAllocations = TokenAllocation[]
 export type GetPrices = (
   baseSymbols: string[],
   quote: string,
-  withMarketCap?: boolean,
+  additionalInput: Record<string, unknown>,
+  withMarketCap: boolean,
 ) => Promise<ResponsePayload>
 
 export type SourceRequestOptions = { [source: string]: DefaultConfig }
 
-export type Config = {
+export interface Config extends BaseConfig {
   sources: SourceRequestOptions
   defaultMethod: string
   defaultQuote: string
   defaultSource?: string
 }
+
+export { TInputParameters, inputParameters } from './endpoint'

@@ -1,4 +1,4 @@
-import { AdapterRequest, Execute } from '@chainlink/types'
+import { AdapterRequest, Execute } from '@chainlink/ea-bootstrap'
 import * as cryptoVolatilityAdapter from '../../src/index'
 import { BigNumber } from 'ethers'
 import nock from 'nock'
@@ -70,7 +70,7 @@ describe('execute', () => {
   const id = '1'
 
   beforeAll(async () => {
-    execute = await cryptoVolatilityAdapter.execute
+    execute = await cryptoVolatilityAdapter.makeExecute()
   })
 
   describe('with isAdaptive true', () => {

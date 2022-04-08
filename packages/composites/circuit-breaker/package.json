@@ -1,6 +1,6 @@
 {
   "name": "@chainlink/circuit-breaker-adapter",
-  "version": "1.0.32",
+  "version": "1.0.44",
   "description": "Chainlink circuit-breaker adapter.",
   "keywords": [
     "Chainlink",
@@ -36,7 +36,6 @@
   },
   "devDependencies": {
     "@chainlink/ea-test-helpers": "workspace:*",
-    "@chainlink/types": "workspace:*",
     "@types/jest": "27.0.3",
     "@types/node": "16.11.19",
     "nock": "13.2.4",

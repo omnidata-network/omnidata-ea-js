@@ -1,21 +1,33 @@
 import * as JSONRPC from '@chainlink/json-rpc-adapter'
-import { Config, ExecuteWithConfig } from '@chainlink/types'
+import { ExecuteWithConfig, InputParameters } from '@chainlink/ea-bootstrap'
 import { Validator, Requester } from '@chainlink/ea-bootstrap'
 import { DEFAULT_RPC_URL, ExtendedConfig } from '../config'
 import { ethers } from 'ethers'
 
 export const NAME = 'format'
+export const supportedEndpoints = [NAME]
 
 export const description =
   'The format endpoint encodes the chainId, block hash, and block receiptsRoot as bytes and returns that without a 0x prefix.'
 
-export const inputParams = {
-  url: false,
-  chainId: true,
-  blockNumber: true,
+export type TInputParameters = { url?: string; chainId?: string; blockNumber: number }
+
+export const inputParameters: InputParameters<TInputParameters> = {
+  url: {
+    description: 'Blockchain RPC endpoint',
+    required: false,
+  },
+  chainId: {
+    description: 'An identifier for which network of the blockchain to use',
+    required: false,
+  },
+  blockNumber: {
+    description: 'Block number to query for',
+    required: true,
+  },
 }
 
-interface ResponseSchema {
+type ResponseSchema = {
   difficulty: string
   extraData: string
   gasLimit: string
@@ -39,7 +51,7 @@ interface ResponseSchema {
 }
 
 export const execute: ExecuteWithConfig<ExtendedConfig> = async (request, context, config) => {
-  const validator = new Validator(request, inputParams)
+  const validator = new Validator<TInputParameters>(request, inputParameters)
 
   const url = validator.validated.data.url || config.RPC_URL || DEFAULT_RPC_URL
   const provider = new ethers.providers.JsonRpcProvider(url)
@@ -49,21 +61,24 @@ export const execute: ExecuteWithConfig<ExtendedConfig> = async (request, contex
   const blockNumber = validator.validated.data.blockNumber
 
   const block = await provider.getBlock(blockNumber)
-  const _execute: ExecuteWithConfig<Config> = JSONRPC.makeExecute()
+  const _execute = JSONRPC.makeExecute(config)
   const response = await _execute(
     {
       ...request,
-      data: { ...request.data, method: 'eth_getBlockByHash', params: [block.hash, false] },
+      data: {
+        ...(request.data as JSONRPC.types.request.TInputParameters),
+        method: 'eth_getBlockByHash',
+        params: [block.hash, 'false'],
+      },
     },
     context,
-    config,
   )
   const coder = new ethers.utils.AbiCoder()
-  response.data.result = coder.encode(
+  const responseData = response.data.result as unknown as ResponseSchema
+  const encodedResult = coder.encode(
     ['uint8', 'bytes32', 'bytes32'],
-    [chainId, response.data.result.hash, response.data.result.receiptsRoot],
+    [chainId, responseData.hash, responseData.receiptsRoot],
   )
-  response.data = response.data as ResponseSchema
-  response.data.result = response.data.result.slice(2)
-  return Requester.success(jobRunID, response)
+  const result = encodedResult.slice(2)
+  return Requester.success(jobRunID, { data: { responseData, result } }, config.verbose)
 }

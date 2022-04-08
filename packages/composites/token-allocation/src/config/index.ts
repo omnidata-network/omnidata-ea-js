@@ -1,3 +1,6 @@
+import { Requester, util } from '@chainlink/ea-bootstrap'
+import { AdapterImplementation } from '@chainlink/ea-bootstrap'
+import { Config, SourceRequestOptions } from '../types'
 import * as Amberdata from '@chainlink/amberdata-adapter'
 import * as CFBenchmarks from '@chainlink/cfbenchmarks-adapter'
 import * as CoinApi from '@chainlink/coinapi-adapter'
@@ -6,29 +9,27 @@ import * as CoinMarketCap from '@chainlink/coinmarketcap-adapter'
 import * as CoinMetrics from '@chainlink/coinmetrics-adapter'
 import * as CoinPaprika from '@chainlink/coinpaprika-adapter'
 import * as CryptoCompare from '@chainlink/cryptocompare-adapter'
-import { Requester, util } from '@chainlink/ea-bootstrap'
 import * as Finage from '@chainlink/finage-adapter'
 import * as Kaiko from '@chainlink/kaiko-adapter'
 import * as Nomics from '@chainlink/nomics-adapter'
 import * as NCFX from '@chainlink/ncfx-adapter'
 import * as Tiingo from '@chainlink/tiingo-adapter'
-import { AdapterImplementation } from '@chainlink/types'
-import { Config, SourceRequestOptions } from '../types'
 
+// TODO types
 export const adapters: AdapterImplementation[] = [
-  Amberdata,
-  CFBenchmarks,
-  CoinApi,
-  CoinGecko,
-  CoinMarketCap,
-  CoinMetrics,
-  CoinPaprika,
-  CryptoCompare,
-  Finage,
-  Kaiko,
-  NCFX,
-  Nomics,
-  Tiingo,
+  Amberdata as any,
+  CFBenchmarks as any,
+  CoinApi as any,
+  CoinGecko as any,
+  CoinMarketCap as any,
+  CoinMetrics as any,
+  CoinPaprika as any,
+  CryptoCompare as any,
+  Finage as any,
+  Kaiko as any,
+  NCFX as any,
+  Nomics as any,
+  Tiingo as any,
 ]
 
 export type Source = typeof adapters[number]['NAME']
@@ -60,7 +61,11 @@ export const makeConfig = (prefix = ''): Config => {
   }
 }
 
-export const makeOptions = ({ sources }: Config) => {
+export const makeOptions = ({
+  sources,
+}: Config): {
+  source: string[]
+} => {
   const sourceOptions = Object.keys(sources).map((s) => s.toLowerCase())
   return {
     source: sourceOptions,

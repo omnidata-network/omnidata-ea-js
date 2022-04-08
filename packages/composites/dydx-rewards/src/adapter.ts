@@ -1,32 +1,35 @@
-import { AdapterError, Validator } from '@chainlink/ea-bootstrap'
-import { ExecuteFactory, ExecuteWithConfig } from '@chainlink/types'
-import { DEFAULT_METHOD, makeConfig, Config } from './config'
-import { poke } from './method'
+import { Builder } from '@chainlink/ea-bootstrap'
+import type {
+  AdapterRequest,
+  APIEndpoint,
+  ExecuteFactory,
+  ExecuteWithConfig,
+} from '@chainlink/ea-bootstrap'
+import { ExtendedConfig, makeConfig } from './config'
+import * as endpoints from './endpoint'
 
-const inputParams = {
-  method: false,
+export const execute: ExecuteWithConfig<ExtendedConfig, endpoints.TInputParameters> = async (
+  request,
+  context,
+  config,
+) => {
+  return Builder.buildSelector<ExtendedConfig, endpoints.TInputParameters>(
+    request,
+    context,
+    config,
+    endpoints,
+  )
 }
 
-export const execute: ExecuteWithConfig<Config> = async (request, context, config) => {
-  const validator = new Validator(request, inputParams)
+export const endpointSelector = (
+  request: AdapterRequest,
+): APIEndpoint<ExtendedConfig, endpoints.TInputParameters> =>
+  Builder.selectEndpoint<ExtendedConfig, endpoints.TInputParameters>(
+    request,
+    makeConfig(),
+    endpoints,
+  )
 
-  const jobRunID = validator.validated.id
-  const method = validator.validated.data.method || DEFAULT_METHOD
-
-  switch (method.toLowerCase()) {
-    case poke.NAME: {
-      return await poke.execute(request, context, config)
-    }
-    default: {
-      throw new AdapterError({
-        jobRunID,
-        message: `Method ${method} not supported.`,
-        statusCode: 400,
-      })
-    }
-  }
-}
-
-export const makeExecute: ExecuteFactory<Config> = (config?: Config) => {
+export const makeExecute: ExecuteFactory<ExtendedConfig, endpoints.TInputParameters> = (config) => {
   return async (request, context) => execute(request, context, config || makeConfig())
 }

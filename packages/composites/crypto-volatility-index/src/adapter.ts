@@ -1,27 +1,32 @@
-import { Requester, Validator } from '@chainlink/ea-bootstrap'
-import { AdapterContext, AdapterRequest, Execute } from '@chainlink/types'
-import { calculate } from './cryptoVolatilityIndex'
+import { Builder } from '@chainlink/ea-bootstrap'
+import type {
+  Config,
+  AdapterRequest,
+  APIEndpoint,
+  ExecuteFactory,
+  ExecuteWithConfig,
+} from '@chainlink/ea-bootstrap'
+import { makeConfig } from './config'
+import * as endpoints from './endpoint'
 
-const customParams = {
-  contract: ['contractAddress', 'contract'],
-  multiply: false,
-  heartbeatMinutes: false,
-  isAdaptive: false,
-  cryptoCurrencies: false,
-  deviationThreshold: false,
-  lambdaMin: false,
-  lambdaK: false,
-  network: false,
+export const execute: ExecuteWithConfig<Config, endpoints.TInputParameters> = async (
+  request,
+  context,
+  config,
+) => {
+  return Builder.buildSelector<Config, endpoints.TInputParameters>(
+    request,
+    context,
+    config,
+    endpoints,
+  )
 }
 
-export const execute: Execute = async (input: AdapterRequest, context: AdapterContext) => {
-  const validator = new Validator(input, customParams)
+export const endpointSelector = (
+  request: AdapterRequest,
+): APIEndpoint<Config, endpoints.TInputParameters> =>
+  Builder.selectEndpoint<Config, endpoints.TInputParameters>(request, makeConfig(), endpoints)
 
-  const jobRunID = validator.validated.id
-
-  const result = await calculate(validator.validated, input.data, context)
-  const response = { data: { result }, status: 200 }
-  return Requester.success(jobRunID, response)
+export const makeExecute: ExecuteFactory<Config, endpoints.TInputParameters> = (config) => {
+  return async (request, context) => execute(request, context, config || makeConfig())
 }
-
-export default execute

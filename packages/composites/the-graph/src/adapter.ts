@@ -1,30 +1,31 @@
-import { Requester, Validator } from '@chainlink/ea-bootstrap'
-import { AdapterRequest, AdapterResponse, Execute, ExecuteWithConfig } from '@chainlink/types'
-import { prices } from './methods'
-import { makeConfig, Config } from './config'
+import { Builder } from '@chainlink/ea-bootstrap'
+import type {
+  AdapterRequest,
+  APIEndpoint,
+  ExecuteFactory,
+  ExecuteWithConfig,
+} from '@chainlink/ea-bootstrap'
+import { Config, makeConfig } from './config'
+import * as endpoints from './endpoint'
 
-const customParams = {
-  method: false,
-}
-
-export const execute: ExecuteWithConfig<Config> = async (
-  input,
+export const execute: ExecuteWithConfig<Config, endpoints.TInputParameters> = async (
+  request,
   context,
   config,
-): Promise<AdapterResponse> => {
-  const validator = new Validator(input, customParams)
-
-  const jobRunID = validator.validated.jobRunID
-  const method = validator.validated.data.method
-  let response
-  switch (method) {
-    case prices.NAME:
-    default:
-      response = await prices.execute(input, context, config)
-  }
-  return Requester.success(jobRunID, response)
+) => {
+  return Builder.buildSelector<Config, endpoints.TInputParameters>(
+    request,
+    context,
+    config,
+    endpoints,
+  )
 }
 
-export const makeExecute = (): Execute => {
-  return async (request: AdapterRequest, context) => execute(request, context, makeConfig())
+export const endpointSelector = (
+  request: AdapterRequest,
+): APIEndpoint<Config, endpoints.TInputParameters> =>
+  Builder.selectEndpoint<Config, endpoints.TInputParameters>(request, makeConfig(), endpoints)
+
+export const makeExecute: ExecuteFactory<Config, endpoints.TInputParameters> = (config) => {
+  return async (request, context) => execute(request, context, config || makeConfig())
 }

@@ -1,6 +1,6 @@
 {
   "name": "@chainlink/synth-index-adapter",
-  "version": "1.0.47",
+  "version": "1.0.60",
   "description": "Chainlink Synth Index adapter",
   "keywords": [
     "Chainlink",
@@ -36,7 +36,6 @@
     "type-fest": "^2.0.0"
   },
   "devDependencies": {
-    "@chainlink/types": "workspace:*",
     "@types/jest": "27.0.3",
     "@types/node": "16.11.19",
     "@types/supertest": "2.0.11",

@@ -1,4 +1,4 @@
-import { AdapterContext, ExecuteWithConfig, InputParameters } from '@chainlink/types'
+import { AdapterContext, ExecuteWithConfig, InputParameters } from '@chainlink/ea-bootstrap'
 import { makeMiddleware, Validator, withMiddleware } from '@chainlink/ea-bootstrap'
 import * as TA from '@chainlink/token-allocation-adapter'
 import { Config } from '../config'
@@ -20,15 +20,23 @@ export function getRatio(context: AdapterContext, id: string): Promise<string> {
     const middleware = makeMiddleware(execute)
     withMiddleware(execute, context, middleware)
       .then((executeWithMiddleware) => {
-        executeWithMiddleware(options, context)
-          .then((value) => resolve(value.data))
+        // TODO: makeExecute return types
+        executeWithMiddleware(options as any, context)
+          .then((value) => resolve(value.data as any))
           .catch(reject)
       })
       .catch((error) => reject(error))
   })
 }
 
-export const inputParameters: InputParameters = {
+export type TInputParameters = {
+  from: string
+  quote: string
+  source?: string
+  method?: string
+}
+
+export const inputParameters: InputParameters<TInputParameters> = {
   from: {
     required: true,
     aliases: ['base', 'coin'],
@@ -50,12 +58,12 @@ export const inputParameters: InputParameters = {
 }
 
 export const execute: ExecuteWithConfig<Config> = async (input, context) => {
-  const validator = new Validator(input, inputParameters)
+  const validator = new Validator<TInputParameters>(input, inputParameters)
 
   const _config = TA.makeConfig()
   const _execute = TA.makeExecute(_config)
 
-  const jobRunID = validator.validated.jobRunID
+  const jobRunID = validator.validated.id
   const from = validator.validated.data.from
   if (from.toUpperCase() !== 'XSUSHI') {
     throw new Error(`Cannot convert anything other than xSUSHI: ${from}`)

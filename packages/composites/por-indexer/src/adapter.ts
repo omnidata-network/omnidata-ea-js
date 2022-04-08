@@ -1,10 +1,10 @@
-import { ExecuteWithConfig, ExecuteFactory } from '@chainlink/types'
+import { ExecuteWithConfig, ExecuteFactory, InputParameters } from '@chainlink/ea-bootstrap'
 import { Requester, Validator } from '@chainlink/ea-bootstrap'
 import { ExtendedConfig, makeConfig } from './config'
-import { PorInputAddress } from '@chainlink/proof-of-reserves-adapter/src/PorInputAddress'
+import { PorInputAddress } from '@chainlink/proof-of-reserves-adapter/src/utils/PorInputAddress'
 import Decimal from 'decimal.js'
 
-const inputParams = {
+const inputParameters: InputParameters = {
   addresses: true,
   minConfirmations: false,
 }
@@ -12,11 +12,12 @@ const inputParams = {
 const getPorId = (network: string, chainId: string) => `${network}_${chainId}`.toUpperCase()
 
 export const execute: ExecuteWithConfig<ExtendedConfig> = async (request, _context, config) => {
-  const validator = new Validator(request, inputParams)
+  const validator = new Validator(request, inputParameters)
 
-  const jobRunID = validator.validated.jobRunID
+  const jobRunID = validator.validated.id
   const minConfirmations = validator.validated.data.minConfirmations as number
-  const porInputAddresses = validator.validated.data.addresses as PorInputAddress[]
+  const porInputAddresses = validator.validated.data.addresses as unknown as PorInputAddress[]
+  // TODO: makeExecute response type
 
   // Collect addresses into their respective PoR requests
   // Mapping from PoR ID to list of addresses
@@ -58,7 +59,8 @@ export const execute: ExecuteWithConfig<ExtendedConfig> = async (request, _conte
   const responses = await Promise.all(responsePromises)
   const summedTotalReserves = responses
     .map((response) => {
-      const totalReserves = new Decimal(response.data.data.totalReserves)
+      const totalReserves = new Decimal((response.data as any).data.totalReserves)
+      // TODO: makeExecute response type
       if (!totalReserves.isFinite() || totalReserves.isNaN()) {
         throw new Error(`Invalid totalReserves answer: ${totalReserves.toString()}`)
       }

@@ -1,6 +1,11 @@
 import { Requester, Validator } from '@chainlink/ea-bootstrap'
-import { ExecuteWithConfig, Execute, AdapterContext } from '@chainlink/types'
-import { Config } from '../config'
+import type {
+  ExecuteWithConfig,
+  Execute,
+  AdapterContext,
+  InputParameters,
+} from '@chainlink/ea-bootstrap'
+import { ExtendedConfig } from '../config'
 import { ethers, BigNumber } from 'ethers'
 import { OracleRequester } from '../contracts'
 import {
@@ -27,7 +32,20 @@ export const deconstructJsonTree = (data: MerkleTreeData): AddressRewards => {
   return res
 }
 
-const customParams = {
+export type TInputParameters = {
+  traderRewardsAmount?: string
+  marketMakerRewardsAmount?: string
+  ipnsName: string
+  traderScoreAlpha?: string
+  traderScoreA?: string
+  traderScoreB?: string
+  traderScoreC?: string
+  callbackAddress: string
+  newEpoch: string
+  activeRootIpfsCid: string
+}
+
+const inputParameters: InputParameters<TInputParameters> = {
   traderRewardsAmount: false,
   marketMakerRewardsAmount: false,
   ipnsName: true,
@@ -58,10 +76,10 @@ const parseAddress = (address: string): string => {
   return `0x${buf.toString('hex').slice(-40)}`
 }
 
-export const execute: ExecuteWithConfig<Config> = async (input, context, config) => {
-  const validator = new Validator(input, customParams)
+export const execute: ExecuteWithConfig<ExtendedConfig> = async (input, context, config) => {
+  const validator = new Validator<TInputParameters>(input, inputParameters)
 
-  const jobRunID = validator.validated.jobRunID
+  const jobRunID = validator.validated.id
 
   let traderRewardsAmount = new bn.BigNumber(config.traderRewardsAmount)
   let marketMakerRewardsAmount = new bn.BigNumber(config.marketMakerRewardsAmount)
@@ -80,17 +98,18 @@ export const execute: ExecuteWithConfig<Config> = async (input, context, config)
   const traderScoreA = new bn.BigNumber(
     config.traderScoreA ??
       validator.validated.data.traderScoreA ??
-      validator.validated.data.traderScoreAlpha,
+      validator.validated.data.traderScoreAlpha ??
+      0,
   )
     .div('1e18')
     .toNumber()
   const traderScoreB = new bn.BigNumber(
-    config.traderScoreB ?? validator.validated.data.traderScoreB,
+    config.traderScoreB ?? validator.validated.data.traderScoreB ?? 0,
   )
     .div('1e18')
     .toNumber()
   const traderScoreC = new bn.BigNumber(
-    config.traderScoreC ?? validator.validated.data.traderScoreC,
+    config.traderScoreC ?? validator.validated.data.traderScoreC ?? 0,
   )
     .div('1e18')
     .toNumber()
@@ -101,7 +120,9 @@ export const execute: ExecuteWithConfig<Config> = async (input, context, config)
 
   const requesterContract = new ethers.Contract(callbackAddress, OracleRequester, config.wallet)
 
-  const ipfs = IPFS.makeExecute(IPFS.makeConfig(IPFS.NAME))
+  const ipfs = IPFS.makeExecute(IPFS.makeConfig(IPFS.NAME)) as any
+  // TODO: makeExecute return types
+
   const rewardsInput: Input = {
     traderRewardsAmount,
     marketMakerRewardsAmount,

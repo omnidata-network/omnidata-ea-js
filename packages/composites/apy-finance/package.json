@@ -1,6 +1,6 @@
 {
   "name": "@chainlink/apy-finance-adapter",
-  "version": "1.0.47",
+  "version": "1.0.60",
   "description": "Chainlink APY Finance TVL adapter",
   "keywords": [
     "Chainlink",
@@ -34,7 +34,6 @@
     "tslib": "^2.3.1"
   },
   "devDependencies": {
-    "@chainlink/types": "workspace:*",
     "@types/jest": "27.0.3",
     "@types/node": "16.11.19",
     "nock": "13.2.4",

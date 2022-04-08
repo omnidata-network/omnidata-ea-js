@@ -1,6 +1,6 @@
 import { Requester } from '@chainlink/ea-bootstrap'
 import { assertError, assertSuccess } from '@chainlink/ea-test-helpers'
-import { AdapterRequest } from '@chainlink/types'
+import { AdapterRequest } from '@chainlink/ea-bootstrap'
 import express from 'express'
 import { Server } from 'http'
 import { Action, makeExecute } from '../../src/adapter'
@@ -18,7 +18,7 @@ describe('execute', () => {
         {
           type: 'oracleServer/error',
           data: {
-            error: `Required parameter not supplied: request_id`,
+            error: `Required parameter request_id must be non-null and non-empty`,
           },
         },
       ],
@@ -33,7 +33,7 @@ describe('execute', () => {
           type: 'oracleServer/error',
           data: {
             queryId: '3939',
-            error: `Required parameter not supplied: payment`,
+            error: `Required parameter payment must be non-null and non-empty`,
           },
         },
       ],

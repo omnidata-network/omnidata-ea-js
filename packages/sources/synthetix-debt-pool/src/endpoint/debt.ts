@@ -1,18 +1,20 @@
 import { AdapterError } from '@chainlink/ea-bootstrap'
-import { ExecuteWithConfig } from '@chainlink/types'
-import { BigNumber } from 'ethers'
+import { ExecuteWithConfig } from '@chainlink/ea-bootstrap'
+import { BigNumber, ethers } from 'ethers'
 import {
-  getChainSynthetixInstance,
+  getContractAddress,
+  TInputParameters,
   getDataFromAcrossChains,
   inputParameters as commonInputParameters,
-} from '../commons'
+} from '../utils'
 import { Config } from '../config'
+import { DEBT_CACHE_ABI } from './abi'
 
 // Needs to be exported so that doc generator script works
 export const inputParameters = commonInputParameters
 export const supportedEndpoints = ['debt']
 
-export const execute: ExecuteWithConfig<Config> = async (request, _, config) =>
+export const execute: ExecuteWithConfig<Config, TInputParameters> = async (request, _, config) =>
   await getDataFromAcrossChains(request, config, getTotalDebtIssued)
 
 const getTotalDebtIssued = async (
@@ -22,9 +24,21 @@ const getTotalDebtIssued = async (
 ): Promise<BigNumber> => {
   const chainResponses = await Promise.all(
     chainsToQuery.map(async (network): Promise<BigNumber> => {
-      const snxjs = getChainSynthetixInstance(network, jobRunID, config)
+      if (!config.chains[network])
+        throw new AdapterError({
+          jobRunID,
+          statusCode: 500,
+          message: `Chain ${network} not configured`,
+        })
+      const networkProvider = new ethers.providers.JsonRpcProvider(config.chains[network].rpcURL)
       try {
-        const [debtIssued] = await snxjs.contracts.DebtCache.currentDebt()
+        const debtCacheAddress = await getContractAddress(
+          networkProvider,
+          config.chains[network].chainAddressResolverAddress,
+          'DebtCache',
+        )
+        const debtCache = new ethers.Contract(debtCacheAddress, DEBT_CACHE_ABI, networkProvider)
+        const [debtIssued] = await debtCache.currentDebt()
         return debtIssued
       } catch (e) {
         throw new AdapterError({

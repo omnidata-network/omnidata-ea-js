@@ -1,25 +1,23 @@
-import { Requester, Validator, Logger } from '@chainlink/ea-bootstrap'
+import { Requester, Validator, Overrider, Logger } from '@chainlink/ea-bootstrap'
 import {
   Config,
   ExecuteWithConfig,
   AxiosResponse,
   AdapterRequest,
   InputParameters,
-} from '@chainlink/types'
+} from '@chainlink/ea-bootstrap'
 import { NAME as AdapterName } from '../config'
-import overrides from '../config/symbols.json'
+import internalOverrides from '../config/overrides.json'
 
-import { getCoinIds, getSymbolsToIds } from '../util'
+import { getCoinIds } from '../util'
 
 export const supportedEndpoints = ['crypto', 'price', 'marketcap', 'volume']
 export const batchablePropertyPath = [{ name: 'base' }, { name: 'quote' }]
 
-const customError = (data: ResponseSchema) => {
-  return Object.keys(data).length === 0
-}
+const customError = (data: ResponseSchema) => Object.keys(data).length === 0
 
 const buildResultPath = (path: string) => (request: AdapterRequest) => {
-  const validator = new Validator(request, inputParameters, {}, { overrides })
+  const validator = new Validator(request, inputParameters)
 
   const quote = validator.validated.data.quote
   if (Array.isArray(quote)) return ''
@@ -38,7 +36,8 @@ export const endpointResultPaths: {
 export const description =
   '**NOTE: the `price` endpoint is temporarily still supported, however, is being deprecated. Please use the `crypto` endpoint instead.**'
 
-export const inputParameters: InputParameters = {
+export type TInputParameters = { coinid: string; base: string | string[]; quote: string | string[] }
+export const inputParameters: InputParameters<TInputParameters> = {
   coinid: {
     description:
       'The CoinGecko id or array of ids of the coin(s) to query (Note: because of current limitations to use a dummy base will need to be supplied)',
@@ -60,26 +59,29 @@ export interface ResponseSchema {
   [key: string]: Record<string, number>
 }
 
+type OverrideToOriginalSymbol = {
+  [id: string]: string
+}
+
 const handleBatchedRequest = (
   jobRunID: string,
   request: AdapterRequest,
   response: AxiosResponse<ResponseSchema>,
-  validator: Validator,
   endpoint: string,
-  idToSymbol: Record<string, string>,
+  idToSymbol: OverrideToOriginalSymbol,
 ) => {
   const payload: [AdapterRequest, number][] = []
   for (const base in response.data) {
     const quoteArray = Array.isArray(request.data.quote) ? request.data.quote : [request.data.quote]
     for (const quote of quoteArray) {
-      const symbol = idToSymbol?.[base]
-      if (symbol) {
+      const originalSymbol = idToSymbol[base]
+      if (originalSymbol) {
         const individualRequest = {
           ...request,
           data: {
             ...request.data,
-            base: validator.overrideReverseLookup(AdapterName, 'overrides', symbol).toUpperCase(),
-            quote: quote.toUpperCase(),
+            base: originalSymbol.toUpperCase(),
+            quote: (quote as string).toUpperCase(),
           },
         }
         payload.push([
@@ -101,24 +103,46 @@ const handleBatchedRequest = (
 }
 
 export const execute: ExecuteWithConfig<Config> = async (request, context, config) => {
-  const validator = new Validator(request, inputParameters, {}, { overrides })
+  const validator = new Validator<TInputParameters>(
+    request,
+    inputParameters,
+    {},
+    { overrides: internalOverrides },
+  )
 
-  const endpoint = validator.validated.data.endpoint
+  const endpoint = validator.validated.data.endpoint || ''
   const jobRunID = validator.validated.id
-  const base = validator.overrideSymbol(AdapterName)
+  const base = validator.validated.data.base
   const quote = validator.validated.data.quote
   const coinid = validator.validated.data.coinid
-  let idToSymbol = {}
-  let ids = coinid
-  if (!ids) {
-    const coinIds = await getCoinIds(context, jobRunID)
-    const symbols = Array.isArray(base) ? base : [base]
-    idToSymbol = getSymbolsToIds(symbols, coinIds)
-    ids = Object.keys(idToSymbol).join(',')
+
+  let ids: string
+  let idToSymbol: OverrideToOriginalSymbol = {}
+  if (!coinid) {
+    const overrider = new Overrider(
+      internalOverrides,
+      request.data?.overrides,
+      AdapterName,
+      jobRunID,
+    )
+    const [overriddenCoins, remainingSyms] = overrider.performOverrides(base)
+    let requestedCoins = overriddenCoins
+    if (remainingSyms.length > 0) {
+      const coinsResponse = await getCoinIds(context, jobRunID)
+      requestedCoins = Overrider.convertRemainingSymbolsToIds(
+        overriddenCoins,
+        remainingSyms.map((sym) => sym.toLowerCase()),
+        coinsResponse,
+      )
+    }
+    ids = Object.values(requestedCoins).join(',')
+    idToSymbol = Overrider.invertRequestedCoinsObject(requestedCoins)
+  } else {
+    ids = Array.isArray(coinid) ? coinid.join(',') : coinid
   }
 
   const url = '/simple/price'
-  const resultPath: string = validator.validated.data.resultPath
+  const resultPath: string = (validator.validated.data.resultPath || '').toString()
 
   const params = {
     ids,
@@ -137,7 +161,7 @@ export const execute: ExecuteWithConfig<Config> = async (request, context, confi
   const response = await Requester.request<ResponseSchema>(options, customError)
 
   if (Array.isArray(base) || Array.isArray(quote))
-    return handleBatchedRequest(jobRunID, request, response, validator, endpoint, idToSymbol)
+    return handleBatchedRequest(jobRunID, request, response, endpoint, idToSymbol)
   const result = Requester.validateResultNumber(response.data, [ids.toLowerCase(), resultPath])
 
   return Requester.success(

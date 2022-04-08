@@ -1,5 +1,5 @@
-import { Requester, Validator, AdapterError } from '@chainlink/ea-bootstrap'
-import { ExecuteWithConfig, Config, InputParameters } from '@chainlink/types'
+import { Requester, Validator, AdapterError, util } from '@chainlink/ea-bootstrap'
+import type { ExecuteWithConfig, Config, InputParameters } from '@chainlink/ea-bootstrap'
 
 export const supportedEndpoints = ['us']
 
@@ -7,7 +7,8 @@ export const endpointResultPaths = {
   us: 'death',
 }
 
-export const inputParameters: InputParameters = {
+export type TInputParameters = { date: string }
+export const inputParameters: InputParameters<TInputParameters> = {
   date: {
     description: 'The date to query formatted by `[YEAR][MONTH][DAY]` (e.g. `20201012`)',
   },
@@ -65,11 +66,11 @@ export interface ResponseSchema {
 }
 
 export const execute: ExecuteWithConfig<Config> = async (request, _, config) => {
-  const validator = new Validator(request, inputParameters)
+  const validator = new Validator<TInputParameters>(request, inputParameters)
 
   const jobRunID = validator.validated.id
   const date = validator.validated.data.date
-  const resultPath = validator.validated.data.resultPath
+  const resultPath = (validator.validated.data.resultPath || '').toString()
   if (!validDate(date))
     throw new AdapterError({
       jobRunID,
@@ -77,7 +78,7 @@ export const execute: ExecuteWithConfig<Config> = async (request, _, config) => 
       statusCode: 400,
     })
   const suffix = date ? 'daily' : 'current'
-  const url = `us/${suffix}.json`
+  const url = util.buildUrlPath('us/:suffix.json', { suffix })
 
   const options = {
     ...config.api,

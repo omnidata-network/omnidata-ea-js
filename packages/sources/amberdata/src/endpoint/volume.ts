@@ -1,5 +1,11 @@
-import { Requester, Validator } from '@chainlink/ea-bootstrap'
-import { ExecuteWithConfig, Config, Includes, IncludePair, InputParameters } from '@chainlink/types'
+import { Requester, util, Validator } from '@chainlink/ea-bootstrap'
+import type {
+  ExecuteWithConfig,
+  Config,
+  Includes,
+  IncludePair,
+  InputParameters,
+} from '@chainlink/ea-bootstrap'
 import { NAME as AdapterName } from '../config'
 import includes from './../config/includes.json'
 
@@ -13,7 +19,10 @@ const today = new Date()
 const yesterday = new Date(today)
 
 const symbolOptions = (from: string, to: string) => ({
-  url: `/api/v2/market/spot/prices/pairs/${from.toLowerCase()}_${to.toLowerCase()}/historical`,
+  url: util.buildUrlPath('/api/v2/market/spot/prices/pairs/:from_:to/historical', {
+    from: from.toLowerCase(),
+    to: to.toLowerCase(),
+  }),
   params: {
     timeInterval: 'd',
     startDate: yesterday.setDate(yesterday.getDate() - 1),
@@ -23,7 +32,10 @@ const symbolOptions = (from: string, to: string) => ({
 })
 
 const tokenOptions = (from: string, to: string) => ({
-  url: `/api/v2/market/defi/prices/pairs/bases/${from}/quotes/${to}/historical`,
+  url: util.buildUrlPath('/api/v2/market/defi/prices/pairs/bases/:from/quotes/:to/historical', {
+    from,
+    to,
+  }),
   params: {
     timeInterval: 'd',
     startDate: yesterday.setDate(yesterday.getDate() - 1),
@@ -34,7 +46,9 @@ const tokenOptions = (from: string, to: string) => ({
 export const description =
   'Gets the [24h-volume for historical of a pair](https://docs.amberdata.io/reference#spot-price-pair-historical) from Amberdata.'
 
-export const inputParameters: InputParameters = {
+export type TInputParameters = { base: string; quote: string }
+
+export const inputParameters: InputParameters<TInputParameters> = {
   base: {
     required: true,
     aliases: ['from', 'coin'],
@@ -65,7 +79,7 @@ export interface ResponseSchema {
 }
 
 export const execute: ExecuteWithConfig<Config> = async (input, _, config) => {
-  const validator = new Validator(input, inputParameters, {}, { includes })
+  const validator = new Validator<TInputParameters>(input, inputParameters, {}, { includes })
 
   const jobRunID = validator.validated.id
   const { url, params, inverse } = getOptions(validator)
@@ -79,13 +93,13 @@ export const execute: ExecuteWithConfig<Config> = async (input, _, config) => {
 }
 
 const getOptions = (
-  validator: Validator,
+  validator: Validator<TInputParameters>,
 ): {
   url: string
   params: Record<string, unknown>
   inverse?: boolean
 } => {
-  const base = validator.overrideSymbol(AdapterName) as string
+  const base = validator.overrideSymbol(AdapterName, validator.validated.data.base)
   const quote = validator.validated.data.quote
   const includes = validator.validated.includes || []
 
@@ -94,7 +108,7 @@ const getOptions = (
 }
 
 const getIncludesOptions = (
-  validator: Validator,
+  validator: Validator<TInputParameters>,
   from: string,
   to: string,
   includes: string[] | Includes[],
@@ -119,7 +133,7 @@ const getIncludesOptions = (
 }
 
 const getIncludes = (
-  validator: Validator,
+  validator: Validator<TInputParameters>,
   from: string,
   to: string,
   includes: string[] | Includes[],

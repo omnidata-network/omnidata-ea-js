@@ -1,11 +1,18 @@
-import { Requester } from '@chainlink/ea-bootstrap'
+import { Requester, util } from '@chainlink/ea-bootstrap'
 import { balance } from '@chainlink/ea-factories'
-import { Config, ExecuteFactory, RequestConfig } from '@chainlink/types'
+import {
+  Config,
+  ExecuteFactory,
+  AxiosRequestConfig,
+  InputParameters,
+} from '@chainlink/ea-bootstrap'
 import { BLOCKCHAINS, isChainType, isCoinType } from '../config'
+import { TBalanceInputParameters } from '@chainlink/ea-factories/src/factories/balance'
 
 export const supportedEndpoints = ['balance']
 
-export const inputParameters = balance.inputParameters
+export type TInputParameters = TBalanceInputParameters
+export const inputParameters: InputParameters<TInputParameters> = balance.inputParameters
 
 export interface ResponseSchema {
   status: number
@@ -21,7 +28,8 @@ export interface ResponseSchema {
   }
 }
 
-const getBalanceURI = (address: string) => `/api/v2/addresses/${address}/account-balances/latest`
+const getBalanceURI = (address: string) =>
+  util.buildUrlPath('/api/v2/addresses/:address/account-balances/latest', { address })
 
 const getBlockchainHeader = (coin?: string) => {
   const network = Requester.toVendorName(coin, BLOCKCHAINS)
@@ -29,11 +37,11 @@ const getBlockchainHeader = (coin?: string) => {
 }
 
 const getBalance: balance.GetBalance = async (account, config) => {
-  const reqConfig: RequestConfig = {
+  const reqConfig: AxiosRequestConfig = {
     ...config.api,
     url: getBalanceURI(account.address),
     headers: {
-      ...config.api.headers,
+      ...config.api?.headers,
       'x-amberdata-blockchain-id': getBlockchainHeader(account.coin),
     },
   }
@@ -46,5 +54,5 @@ const getBalance: balance.GetBalance = async (account, config) => {
 
 const isSupported: balance.IsSupported = (coin, chain) => isChainType(chain) && isCoinType(coin)
 
-export const makeExecute: ExecuteFactory<Config> = (config?: Config) =>
+export const makeExecute: ExecuteFactory<Config, TInputParameters> = (config?: Config) =>
   balance.make({ ...config, getBalance, isSupported })

@@ -1,5 +1,5 @@
-import { AdapterError, Requester, Validator } from '@chainlink/ea-bootstrap'
-import { ExecuteWithConfig, Config, InputParameters } from '@chainlink/types'
+import { AdapterError, Requester, util, Validator } from '@chainlink/ea-bootstrap'
+import type { ExecuteWithConfig, Config, InputParameters } from '@chainlink/ea-bootstrap'
 import { BLOCKCHAIN_NAME_BY_TICKER, BlockchainTickers } from '../config'
 
 export const supportedEndpoints = ['height', 'difficulty']
@@ -38,7 +38,8 @@ export interface ResponseSchema {
 export const description =
   'https://developers.cryptoapis.io/technical-documentation/blockchain-data/unified-endpoints/get-latest-mined-block'
 
-export const inputParameters: InputParameters = {
+export type TInputParameters = { blockchain: string; network: string }
+export const inputParameters: InputParameters<TInputParameters> = {
   blockchain: {
     aliases: ['coin', 'market'],
     description: 'The blockchain to retrieve info for',
@@ -55,7 +56,7 @@ export const inputParameters: InputParameters = {
 }
 
 export const execute: ExecuteWithConfig<Config> = async (request, _, config) => {
-  const validator = new Validator(request, inputParameters)
+  const validator = new Validator<TInputParameters>(request, inputParameters)
 
   const jobRunID = validator.validated.id
   const blockchain = validator.validated.data.blockchain
@@ -68,9 +69,14 @@ export const execute: ExecuteWithConfig<Config> = async (request, _, config) => 
   const network = validator.validated.data.network || 'mainnet'
   const resultPath = validator.validated.data.resultPath
 
-  const url = `/v2/blockchain-data/${
-    BLOCKCHAIN_NAME_BY_TICKER[blockchain.toLowerCase() as BlockchainTickers]
-  }-specific/${network.toLowerCase()}/blocks/last`
+  const url = util.buildUrlPath(
+    `/v2/blockchain-data/:blockchain_name-specific/:network_name/blocks/last`,
+    {
+      blockchain_name: BLOCKCHAIN_NAME_BY_TICKER[blockchain.toLowerCase() as BlockchainTickers],
+      network_name: network.toLowerCase(),
+    },
+  )
+
   const options = { ...config.api, url }
   const response = await Requester.request<ResponseSchema>(options)
   const result = Requester.validateResultNumber(response.data, resultPath)

@@ -1,4 +1,4 @@
-import { AdapterRequest } from '@chainlink/types'
+import { AdapterRequest } from '@chainlink/ea-bootstrap'
 import request, { SuperTest, Test } from 'supertest'
 import process from 'process'
 import nock from 'nock'
@@ -6,6 +6,7 @@ import http from 'http'
 import { server as startServer } from '../../src'
 import { mockLCDResponseSuccess } from './fixtures'
 import { AddressInfo } from 'net'
+import { TInputParameters } from '../../src/endpoint/view'
 
 let oldEnv: NodeJS.ProcessEnv
 
@@ -46,7 +47,7 @@ describe('execute', () => {
   })
 
   describe('with address/query', () => {
-    const data: AdapterRequest = {
+    const data: AdapterRequest<TInputParameters> = {
       id,
       data: {
         address: 'terra1dw5ex5g802vgrek3nzppwt29tfzlpa38ep97qy',

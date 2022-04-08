@@ -1,11 +1,12 @@
 import { Validator, Requester, Logger } from '@chainlink/ea-bootstrap'
-import { AdapterRequest, AdapterResponse, InputParameters } from '@chainlink/types'
-import { BigNumber, ethers } from 'ethers'
+import { AdapterRequest, AdapterResponse, InputParameters } from '@chainlink/ea-bootstrap'
+import { ethers } from 'ethers'
 import { SupportedChains, Config } from './config'
 import { AdapterError } from '@chainlink/ea-bootstrap'
-import { SynthetixJS, synthetix } from '@synthetixio/contracts-interface'
+import { ADDRESS_RESOLVER_ABI } from './endpoint/abi'
 
-export const inputParameters: InputParameters = {
+export type TInputParameters = { chainSources: string[] }
+export const inputParameters: InputParameters<TInputParameters> = {
   chainSources: {
     required: false,
     description: `Array of chains to pull debt from. Options for array elements are "mainnet", "mainnet-ovm", "kovan", "kovan-ovm"`,
@@ -13,14 +14,18 @@ export const inputParameters: InputParameters = {
   },
 }
 
-type GetDebtData = (jobRunID: string, config: Config, chainsToQuery: string[]) => Promise<BigNumber>
+type GetDebtData = (
+  jobRunID: string,
+  config: Config,
+  chainsToQuery: string[],
+) => Promise<ethers.BigNumber>
 
 export const getDataFromAcrossChains = async (
   request: AdapterRequest,
   config: Config,
   getDebtData: GetDebtData,
 ): Promise<AdapterResponse> => {
-  const validator = new Validator(request, inputParameters)
+  const validator = new Validator<TInputParameters>(request, inputParameters)
   const jobRunID = validator.validated.id
   let { chainSources } = validator.validated.data
 
@@ -50,18 +55,16 @@ const validateChainSources = (jobRunID: string, chainSources: string[]) => {
   }
 }
 
-export const getChainSynthetixInstance = (
-  network: string,
-  jobRunID: string,
-  config: Config,
-): SynthetixJS => {
-  const { rpcURL, networkId } = config.chains[network]
-  if (!rpcURL) {
-    throw new AdapterError({
-      jobRunID,
-      message: `RPC URL not set for chain: ${network}`,
-    })
-  }
-  const provider = new ethers.providers.JsonRpcProvider(rpcURL)
-  return synthetix({ provider, networkId })
+export const getContractAddress = async (
+  provider: ethers.providers.JsonRpcProvider,
+  addressResolverAddress: string,
+  contractName: string,
+): Promise<string> => {
+  const addressResolver = new ethers.Contract(
+    addressResolverAddress,
+    ADDRESS_RESOLVER_ABI,
+    provider,
+  )
+  const contractNameBytes32 = ethers.utils.formatBytes32String(contractName)
+  return await addressResolver.getAddress(contractNameBytes32)
 }

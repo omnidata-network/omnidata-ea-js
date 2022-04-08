@@ -1,4 +1,4 @@
-import { AdapterRequest } from '@chainlink/types'
+import { AdapterRequest } from '@chainlink/ea-bootstrap'
 import request, { SuperTest, Test } from 'supertest'
 import process from 'process'
 import nock from 'nock'
@@ -13,7 +13,7 @@ describe('execute', () => {
   let req: SuperTest<Test>
 
   beforeAll(async () => {
-    process.env.API_KEY = process.env.API_KEY || 'test-key'
+    process.env.API_KEY = 'test-key'
     if (process.env.RECORD) {
       nock.recorder.rec()
     }
@@ -36,7 +36,8 @@ describe('execute', () => {
     const data: AdapterRequest = {
       id,
       data: {
-        block: 14000000,
+        block: 10000000,
+        api_key: 'test-key',
       },
     }
 

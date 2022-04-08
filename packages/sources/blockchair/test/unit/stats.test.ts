@@ -1,6 +1,6 @@
 import { AdapterError, Requester } from '@chainlink/ea-bootstrap'
 import { assertError } from '@chainlink/ea-test-helpers'
-import { AdapterRequest } from '@chainlink/types'
+import { AdapterRequest } from '@chainlink/ea-bootstrap'
 import { makeExecute } from '../../src/adapter'
 
 describe('stats endpoint', () => {
@@ -9,8 +9,7 @@ describe('stats endpoint', () => {
 
   describe('validation error', () => {
     const requests = [
-      { name: 'empty body', testData: {} },
-      { name: 'empty data', testData: { data: {} } },
+      { name: 'No blockchain provided', testData: { data: { endpoint: 'difficulty' } } },
     ]
 
     requests.forEach((req) => {

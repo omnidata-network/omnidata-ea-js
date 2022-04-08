@@ -1,5 +1,11 @@
-import { Requester, Validator } from '@chainlink/ea-bootstrap'
-import { Config, ExecuteWithConfig, Includes, IncludePair, InputParameters } from '@chainlink/types'
+import { Requester, util, Validator } from '@chainlink/ea-bootstrap'
+import type {
+  Config,
+  ExecuteWithConfig,
+  Includes,
+  IncludePair,
+  InputParameters,
+} from '@chainlink/ea-bootstrap'
 import {
   DEFAULT_INTERVAL,
   DEFAULT_SORT,
@@ -9,11 +15,18 @@ import {
 import includes from '../config/includes.json'
 import overrides from '../config/symbols.json'
 
-export const supportedEndpoints = ['trades']
+export const supportedEndpoints = ['trades', 'price']
 
 const customError = (data: ResponseSchema) => data.result === 'error'
 
-export const inputParameters: InputParameters = {
+export type TInputParameters = {
+  base: string
+  quote: string
+  interval: string
+  millisecondsAgo: number
+  sort: string
+}
+export const inputParameters: InputParameters<TInputParameters> = {
   base: {
     aliases: ['from', 'coin'],
     required: true,
@@ -23,11 +36,6 @@ export const inputParameters: InputParameters = {
     aliases: ['to', 'market'],
     required: true,
     description: 'The symbol of the currency to convert',
-  },
-  includes: {
-    aliases: ['overrides'],
-    required: false,
-    description: 'If base provided is found in overrides, that will be used',
   },
   interval: {
     required: false,
@@ -48,13 +56,11 @@ export const inputParameters: InputParameters = {
   },
 }
 
-const symbolUrl = (from: string, to: string) =>
-  to.toLowerCase() === 'eth'
-    ? directUrl(from, to)
-    : `/spot_exchange_rate/${from.toLowerCase()}/${to.toLowerCase()}`
-
-const directUrl = (from: string, to: string) =>
-  `/spot_direct_exchange_rate/${from.toLowerCase()}/${to.toLowerCase()}`
+const getUrl = (from: string, to: string) =>
+  util.buildUrlPath('/spot_exchange_rate/:from/:to', {
+    from: from.toLowerCase(),
+    to: to.toLowerCase(),
+  })
 
 export interface ResponseSchema {
   query: {
@@ -85,7 +91,12 @@ export interface ResponseSchema {
 }
 
 export const execute: ExecuteWithConfig<Config> = async (request, _, config) => {
-  const validator = new Validator(request, inputParameters, {}, { includes, overrides })
+  const validator = new Validator<TInputParameters>(
+    request,
+    inputParameters,
+    {},
+    { includes, overrides },
+  )
 
   Requester.logConfig(config)
 
@@ -123,8 +134,8 @@ export const execute: ExecuteWithConfig<Config> = async (request, _, config) => 
 
   const result = Requester.validateResultNumber(
     // sometimes, the most recent(fraction of a second) data contain null price
-    data,
-    [0, 'price'],
+    data[0],
+    'price',
     { inverse },
   )
 
@@ -132,25 +143,25 @@ export const execute: ExecuteWithConfig<Config> = async (request, _, config) => 
 }
 
 const getOptions = (
-  validator: Validator,
+  validator: Validator<TInputParameters>,
 ): {
   url: string
   inverse?: boolean
 } => {
-  const base = validator.overrideSymbol(AdapterName) as string
+  const base = validator.overrideSymbol(AdapterName, validator.validated.data.base)
   const quote = validator.validated.data.quote
   const includes = validator.validated.includes || []
 
   const includeOptions = getIncludesOptions(validator, base, quote, includes)
   return (
     includeOptions ?? {
-      url: symbolUrl(base, quote),
+      url: getUrl(base, quote),
     }
   )
 }
 
 const getIncludesOptions = (
-  validator: Validator,
+  validator: Validator<TInputParameters>,
   from: string,
   to: string,
   includes: string[] | Includes[],
@@ -158,13 +169,13 @@ const getIncludesOptions = (
   const include = getIncludes(validator, from, to, includes)
   if (!include) return undefined
   return {
-    url: directUrl(include.from, include.to),
+    url: getUrl(include.from, include.to),
     inverse: include.inverse,
   }
 }
 
 const getIncludes = (
-  validator: Validator,
+  validator: Validator<TInputParameters>,
   from: string,
   to: string,
   includes: string[] | Includes[],

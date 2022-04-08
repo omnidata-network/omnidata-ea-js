@@ -1,5 +1,5 @@
-import { Requester, Validator } from '@chainlink/ea-bootstrap'
-import { Config, ExecuteWithConfig, InputParameters } from '@chainlink/types'
+import { Requester, util, Validator } from '@chainlink/ea-bootstrap'
+import type { Config, ExecuteWithConfig, InputParameters } from '@chainlink/ea-bootstrap'
 
 export const supportedEndpoints = ['reserves']
 
@@ -9,7 +9,8 @@ export interface ResponseSchema {
   currency: string
 }
 
-export const inputParameters: InputParameters = {
+export type TInputParameters = { token: string; chainId: string; network: string }
+export const inputParameters: InputParameters<TInputParameters> = {
   token: {
     required: true,
     aliases: ['asset', 'coin'],
@@ -37,7 +38,7 @@ export const execute: ExecuteWithConfig<Config> = async (request, _, config) => 
   const token = validator.validated.data.token
   const network = validator.validated.data.network || 'filecoin'
   const chainId = validator.validated.data.chainId || 'mainnet'
-  const url = `/v1/tokens/${token.toLowerCase()}/reserves`
+  const url = util.buildUrlPath('/v1/tokens/:token/reserves', { token: token.toLowerCase() })
 
   const options = { ...config.api, url }
 

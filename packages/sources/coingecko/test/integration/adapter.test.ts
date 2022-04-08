@@ -1,4 +1,4 @@
-import { AdapterRequest } from '@chainlink/types'
+import { AdapterRequest } from '@chainlink/ea-bootstrap'
 import http from 'http'
 import { AddressInfo } from 'net'
 import nock from 'nock'
@@ -46,6 +46,58 @@ describe('execute', () => {
       const response = await req
         .post('/')
         .send(data)
+        .set('Accept', '*/*')
+        .set('Content-Type', 'application/json')
+        .expect('Content-Type', /json/)
+        .expect(200)
+      expect(response.body).toMatchSnapshot()
+    })
+
+    const dataWithOverride: AdapterRequest = {
+      id,
+      data: {
+        base: 'OHM',
+        quote: 'USD',
+        overrides: {
+          coingecko: {
+            OHM: 'olympus',
+          },
+        },
+      },
+    }
+
+    it('should return success for override', async () => {
+      mockCryptoSuccess()
+
+      const response = await req
+        .post('/')
+        .send(dataWithOverride)
+        .set('Accept', '*/*')
+        .set('Content-Type', 'application/json')
+        .expect('Content-Type', /json/)
+        .expect(200)
+      expect(response.body).toMatchSnapshot()
+    })
+
+    const dataWithArray: AdapterRequest = {
+      id,
+      data: {
+        base: ['OHM', 'ETH'],
+        quote: 'USD',
+        overrides: {
+          coingecko: {
+            OHM: 'olympus',
+          },
+        },
+      },
+    }
+
+    it('should return success for array', async () => {
+      mockCryptoSuccess()
+
+      const response = await req
+        .post('/')
+        .send(dataWithArray)
         .set('Accept', '*/*')
         .set('Content-Type', 'application/json')
         .expect('Content-Type', /json/)

@@ -1,6 +1,6 @@
 {
   "name": "@chainlink/ncfx-adapter",
-  "version": "1.1.19",
+  "version": "1.2.6",
   "description": "Chainlink NCFX adapter.",
   "keywords": [
     "Chainlink",
@@ -33,7 +33,6 @@
     "tslib": "^2.3.1"
   },
   "devDependencies": {
-    "@chainlink/types": "workspace:*",
     "@types/jest": "27.0.3",
     "@types/node": "16.11.19",
     "@types/supertest": "2.0.11",

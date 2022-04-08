@@ -1,11 +1,12 @@
-import { Requester, Validator } from '@chainlink/ea-bootstrap'
-import { ExecuteWithConfig, Config, InputParameters } from '@chainlink/types'
+import { Requester, util, Validator } from '@chainlink/ea-bootstrap'
+import { ExecuteWithConfig, Config, InputParameters } from '@chainlink/ea-bootstrap'
 
 export const supportedEndpoints = ['energy']
 
 export const description = 'Returns the price in Euros per MWh'
 
-export const inputParameters: InputParameters = {
+export type TInputParameters = { source: string; date: string; hour: number }
+export const inputParameters: InputParameters<TInputParameters> = {
   source: {
     required: true,
     options: ['1', '2', '3'],
@@ -31,7 +32,7 @@ export interface ResponseSchema {
 }
 
 export const execute: ExecuteWithConfig<Config> = async (request, _, config) => {
-  const validator = new Validator(request, inputParameters)
+  const validator = new Validator<TInputParameters>(request, inputParameters)
 
   const jobRunID = validator.validated.id
   const source = validator.validated.data.source
@@ -39,7 +40,11 @@ export const execute: ExecuteWithConfig<Config> = async (request, _, config) => 
   const date = validator.validated.data.date || `${currentTime.toISOString().slice(0, 10)}` // YYYY-MM-DD
   const hour = validator.validated.data.hour || currentTime.getUTCHours()
 
-  const url = `energy/source/${source}/date/${date}/hour/${hour}/`
+  const url = util.buildUrlPath('energy/source/:source/date/:date/hour/:hour/', {
+    source,
+    date,
+    hour,
+  })
 
   const options = {
     ...config.api,

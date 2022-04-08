@@ -1,7 +1,7 @@
 import { ethers } from 'ethers'
 import { balance } from '@chainlink/ea-factories'
-import { Requester } from '@chainlink/ea-bootstrap'
-import { Config, ExecuteFactory } from '@chainlink/types'
+import { Requester, util } from '@chainlink/ea-bootstrap'
+import type { Config, ExecuteFactory, AdapterData, InputParameters } from '@chainlink/ea-bootstrap'
 import { isCoinType, isChainType, TESTNET_BLOCKCHAINS } from '../config'
 
 export const supportedEndpoints = ['balance']
@@ -9,11 +9,25 @@ export const supportedEndpoints = ['balance']
 export const description =
   'https://docs.cryptoapis.io/rest-apis/blockchain-as-a-service-apis/btc/index#btc-address-info-endpoint'
 
-export const inputParameters = balance.inputParameters
+export type TInputParameters = AdapterData
+export const inputParameters: InputParameters<TInputParameters> = balance.inputParameters
+
+export interface ResponseSchema {
+  payload: {
+    address: string
+    totalSpent: string
+    totalReceived: string
+    balance: string
+    txi: number
+    txo: number
+    txsCount: number
+    addresses: string[]
+  }
+}
 
 const getBalanceURI = (address: string, chain: string, coin: string) => {
   if (chain === 'testnet') chain = Requester.toVendorName(coin, TESTNET_BLOCKCHAINS) || chain
-  return `/v1/bc/${coin}/${chain}/address/${address}`
+  return util.buildUrlPath('/v1/bc/:coin/:chain/address/:address', { coin, chain, address })
 }
 
 const getBalance: balance.GetBalance = async (account, config) => {
@@ -22,7 +36,7 @@ const getBalance: balance.GetBalance = async (account, config) => {
     url: getBalanceURI(account.address, account.chain as string, account.coin as string),
   }
 
-  const response = await Requester.request(options)
+  const response = await Requester.request<ResponseSchema>(options)
   // Each BTC has 8 decimal places
   const balance = ethers.utils.parseUnits(response.data.payload.balance, 8).toString()
 

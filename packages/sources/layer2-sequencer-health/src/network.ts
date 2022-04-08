@@ -1,9 +1,15 @@
-import { Logger, Requester } from '@chainlink/ea-bootstrap'
+import { Logger, Requester, AxiosRequestConfig } from '@chainlink/ea-bootstrap'
 import { HEALTH_ENDPOINTS, Networks, RPC_ENDPOINTS } from './config'
 import { BigNumber, ethers } from 'ethers'
 
+const DEFAULT_PRIVATE_KEY = '0x0000000000000000000000000000000000000000000000000000000000000001'
+
 export interface NetworkHealthCheck {
   (network: Networks, delta: number, deltaBlocks: number): Promise<undefined | boolean>
+}
+
+export interface ResponseSchema {
+  result: number
 }
 
 export const getSequencerHealth: NetworkHealthCheck = async (
@@ -26,7 +32,7 @@ export const getSequencerHealth: NetworkHealthCheck = async (
 }
 
 export const requestBlockHeight = async (network: Networks): Promise<number> => {
-  const request = {
+  const request: AxiosRequestConfig = {
     method: 'POST',
     url: RPC_ENDPOINTS[network],
     headers: {
@@ -39,8 +45,8 @@ export const requestBlockHeight = async (network: Networks): Promise<number> => 
       id: 1,
     },
   }
-  const response = await Requester.request(request)
-  const hexBlock = response?.data?.result
+  const response = await Requester.request<ResponseSchema>(request)
+  const hexBlock = response.data.result
   if (!hexBlock) {
     throw new Error(`Block number not found on network: ${network}`)
   }
@@ -58,7 +64,7 @@ export const getStatusByTransaction = async (
 ): Promise<boolean> => {
   const rpcEndpoint = RPC_ENDPOINTS[network]
   const provider = new ethers.providers.JsonRpcProvider(rpcEndpoint)
-  const wallet = new ethers.Wallet(ethers.Wallet.createRandom()?.privateKey, provider)
+  const wallet = new ethers.Wallet(DEFAULT_PRIVATE_KEY, provider)
 
   // These errors come from the Sequencer when submitting an empty transaction
   const sequencerOnlineErrors: Record<Networks, string[]> = {
@@ -89,19 +95,14 @@ export const getStatusByTransaction = async (
     }
     return (Requester.getResult(e, paths[network]) as string) || ''
   }
-  const _setTxTimeout = (timeout: number): Promise<never> =>
-    new Promise((_, rej) =>
-      setTimeout(
-        () => rej(new Error(`Transaction receipt not received in ${timeout} milliseconds`)),
-        timeout,
-      ),
-    )
+
   try {
     Logger.info(`Submitting empty transaction for network: ${network}`)
-    const receipt = await Promise.race([
-      _setTxTimeout(timeout),
-      wallet.sendTransaction(networkTx[network]),
-    ])
+    const receipt = await race({
+      timeout,
+      promise: wallet.sendTransaction(networkTx[network]),
+      error: `Transaction receipt not received in ${timeout} milliseconds`,
+    })
     Logger.info(`Transaction receipt received with hash ${receipt.hash} for network: ${network}`)
     return (await receipt.wait()).confirmations > 0
   } catch (e) {
@@ -112,4 +113,26 @@ export const getStatusByTransaction = async (
     Logger.error(`Transaction submission failed with an unexpected error: ${e.message}`)
     return false
   }
+}
+
+export function race({
+  promise,
+  timeout,
+  error,
+}: {
+  promise: Promise<ethers.providers.TransactionResponse>
+  timeout: number
+  error: string
+}): Promise<ethers.providers.TransactionResponse> {
+  let timer: NodeJS.Timeout
+
+  return Promise.race([
+    new Promise((_, reject) => {
+      timer = setTimeout(reject, timeout, error)
+    }) as Promise<ethers.providers.TransactionResponse>,
+    promise.then((value) => {
+      clearTimeout(timer)
+      return value
+    }),
+  ])
 }

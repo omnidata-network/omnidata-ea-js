@@ -12,6 +12,7 @@ import { getEnv, toObjectWithNumbers } from './util'
 import { warmupShutdown } from './middleware/cache-warmer/actions'
 import { shutdown } from './middleware/error-backoff/actions'
 import { WSReset } from './middleware/ws/actions'
+import process from 'process'
 
 const version = getEnv('npm_package_version')
 const port = parseInt(getEnv('EA_PORT') as string)
@@ -28,7 +29,13 @@ export const initHandler =
       logger: false,
     })
     const name = adapterContext.name || ''
-    const envDefaultOverrides = adapterContext.envDefaultOverrides
+    const envDefaultOverrides: Record<string, string> | undefined =
+      adapterContext.envDefaultOverrides
+    for (const key in envDefaultOverrides) {
+      if (!process.env[key]) {
+        process.env[key] = envDefaultOverrides[key]
+      }
+    }
     const context: AdapterContext = {
       name,
       envDefaultOverrides,

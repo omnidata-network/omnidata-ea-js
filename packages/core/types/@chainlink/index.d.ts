@@ -117,7 +117,6 @@ declare module '@chainlink/types' {
     metricEnabled: boolean
     rateLimitApiTier?: string
     requestCoalescingEnabled: boolean
-    protocol?: 'ws' | 'http'
     dataProviderRequestTime?: number
   }
 

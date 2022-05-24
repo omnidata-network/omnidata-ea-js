@@ -24,6 +24,9 @@
       "path": "./composites/circuit-breaker"
     },
     {
+      "path": "./composites/covalent"
+    },
+    {
       "path": "./composites/crypto-volatility-index"
     },
     {
@@ -64,6 +67,9 @@
     },
     {
       "path": "./composites/outlier-detection"
+    },
+    {
+      "path": "./composites/omnidata"
     },
     {
       "path": "./composites/por-indexer"

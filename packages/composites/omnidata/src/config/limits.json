@@ -1,0 +1,25 @@
+{
+  "http": {
+    "free": {
+      "rateLimit1s": 3,
+      "rateLimit1h": 60
+    },
+    "basic": {
+      "rateLimit1s": 8,
+      "rateLimit1h": 1000
+    },
+    "premium": {
+      "rateLimit1s": 18,
+      "rateLimit1h": 1666
+    },
+    "business": {
+      "rateLimit1s": 28,
+      "rateLimit1h": 16666
+    },
+    "business+": {
+      "rateLimit1s": 58,
+      "rateLimit1h": 166666
+    }
+  },
+  "ws": {}
+}

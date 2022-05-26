@@ -1,4 +1,4 @@
-import { Validator, Logger } from '@chainlink/ea-bootstrap'
+import { Requester, Validator, Logger } from '@chainlink/ea-bootstrap'
 import {
   AdapterRequest,
   AdapterResponse,
@@ -7,7 +7,6 @@ import {
   InputParameters,
 } from '@chainlink/types'
 import { create, IPFSHTTPClient } from 'ipfs-http-client'
-import { base16 } from 'multiformats/bases/base16'
 
 export const supportedEndpoints = ['write']
 
@@ -33,7 +32,6 @@ export const inputParameters: InputParameters = {
     required: false,
     description: 'The CID version to be returned',
     type: 'number',
-    default: 1,
   },
 }
 
@@ -71,28 +69,18 @@ export const execute: ExecuteWithConfig<Config> = async (
       authorization: auth,
     },
   })
-  const options = { cidVersion, hashAlg: 'sha3-224' }
+  const options = { cidVersion } //hashAlg: 'sha3-224'
 
   const cid = await putFile(serialize({ jobRunID, ...data, ...options }), client, options)
-  Logger.debug('cid:', cid.toString())
-
-  const base16HexCid = `0x${cid.toString(base16).slice(1)}`
   const response = {
     data: {
       result: {
-        base16HexCid,
         cid: cid.toString(),
       },
     },
   }
 
-  // return Requester.success(jobRunID, response, config.verbose)
-  return {
-    jobRunID,
-    result: base16HexCid,
-    ...response,
-    statusCode: 200,
-  }
+  return Requester.success(jobRunID, response, config.verbose)
 }
 
 const putFile = async (

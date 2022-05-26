@@ -6,7 +6,7 @@ import { CustomConfig } from '../index.d'
 export const DEFAULT_ENDPOINT = 'write'
 export const NAME = 'OMNIDATA'
 export const DEFAULT_COVALENT_BASE_URL = 'https://api.covalenthq.com/v1'
-export const DEFAULT_IPFS_URL = 'http://localhost:5001'
+export const DEFAULT_IPFS_URL = 'https://api.thegraph.com/ipfs/api/v0'
 
 export type Config = BaseConfig & CustomConfig
 
@@ -16,12 +16,11 @@ export const makeConfig = (prefix?: string): Config => {
   config.projectId = util.getEnv('INFURA_PROJECT_ID') || ''
   config.projectSecret = util.getEnv('INFURA_PROJECT_SECRET') || ''
   config.verbose = util.parseBool(util.getEnv('VERBOSE')) || true
-  // config.api.baseURL = config.api.baseURL || DEFAULT_BASE_URL
-  // config.covalent.baseURL = util.getEnv('COVALENT_BASE_URL') || ''
+  config.pinningServiceUrl = util.getEnv('PINNING_SERVICE_URL') || ''
+  config.pinningServiceApiKey = util.getEnv('PINNING_SERVICE_API_KEY') || ''
   config.covalentApiKey = util.getEnv('COVALENT_API_KEY') || ''
   config.defaultEndpoint = DEFAULT_ENDPOINT
   config.api = {
-    // ...config.api,
     baseURL: config.api.baseURL || util.getEnv('COVALENT_BASE_URL') || DEFAULT_COVALENT_BASE_URL,
     auth: {
       username: util.getEnv('COVALENT_API_KEY'),

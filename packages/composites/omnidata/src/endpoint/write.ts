@@ -7,6 +7,7 @@ import {
   InputParameters,
 } from '@chainlink/types'
 import { create, IPFSHTTPClient } from 'ipfs-http-client'
+import axios from 'axios'
 
 export const supportedEndpoints = ['write']
 
@@ -37,14 +38,10 @@ export const inputParameters: InputParameters = {
 
 export const execute: ExecuteWithConfig<Config> = async (
   request: AdapterRequest,
-  context: any,
+  _: any,
   config: any,
 ): Promise<AdapterResponse> => {
   const validator = new Validator(request, inputParameters)
-  Logger.info('processing:', validator.validated.data)
-  Logger.info('config data:', config)
-  Logger.info('request info:', request)
-  Logger.info('context info:', context)
 
   if (validator.error) throw validator.error
 
@@ -58,26 +55,35 @@ export const execute: ExecuteWithConfig<Config> = async (
     throw Error('You MUST config the infura project id and secret')
   }
 
-  const auth =
-    projectId && projectSecret
-      ? `Basic ${Buffer.from(projectId + ':' + projectSecret).toString('base64')}`
-      : ''
-
-  const client = create({
-    url: config.ipfsURL,
-    headers: {
-      authorization: auth,
-    },
-  })
-  const options = { cidVersion } //hashAlg: 'sha3-224'
+  const client = create({ url: config.ipfsURL })
+  const options = { cidVersion }
 
   const cid = await putFile(serialize({ jobRunID, ...data, ...options }), client, options)
   const response = {
     data: {
-      result: {
-        cid: cid.toString(),
-      },
+      result: { cid },
     },
+  }
+
+  // pin the cid to web3.storage, estuary or other pinning services
+  if (config.pinningServiceUrl) {
+    axios
+      .post(
+        config.pinningServiceUrl,
+        { cid },
+        {
+          headers: {
+            Accept: '*/*',
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${config.pinningServiceApiKey}`,
+          },
+        },
+      )
+      .catch((error: any) =>
+        Logger.error(
+          `Failed to pin the cid ${cid} to web3.storage, error ${error.messge || error}`,
+        ),
+      )
   }
 
   return Requester.success(jobRunID, response, config.verbose)
@@ -89,7 +95,7 @@ const putFile = async (
   options: Record<string, unknown>,
 ) => {
   const { cid } = await client.add(data, options)
-  return cid
+  return cid.toString()
 }
 
 const serialize = (data: string | object): string | Uint8Array => {

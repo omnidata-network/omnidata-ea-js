@@ -10,12 +10,13 @@ Queries any kind of NFT-related data from Covalent across supported blockchains,
 
 The adapter takes the following environment variables:
 
-| Required? |          Name           |        Description        | Options |       Defaults to       |
-| :-------: | :---------------------: | :-----------------------: | :-----: | :---------------------: |
-|    ✅     |   `COVALENT_API_KEY`    |   The Covalent API key    |         |                         |
-|           |       `IPFS_URL`        |       The IPFS URL        |         | `http://localhost:5001` |
-|           |   `INFURA_PROJECT_ID`   |   The Infura project id   |         |                         |
-|           | `INFURA_PROJECT_SECRET` | The Infura project secret |         |                         |
+| Required? |           Name            |         Description         | Options |              Defaults to               |
+| :-------: | :-----------------------: | :-------------------------: | :-----: | :------------------------------------: |
+|    ✅     |    `COVALENT_API_KEY`     |    The Covalent API key     |         |                                        |
+|           |        `IPFS_URL`         |        The IPFS URL         |         | `https://api.thegraph.com/ipfs/api/v0` |
+|           |    `COVALENT_BASE_URL`    |    The Covalent base URL    |         |    `https://api.covalenthq.com/v1/`    |
+|           |   `PINNING_SERVICE_URL`   |   The pinning service URL   |         |                                        |
+|           | `PINNING_SERVICE_API_KEY` | The pinning service API key |         |                                        |
 
 ## Running
 

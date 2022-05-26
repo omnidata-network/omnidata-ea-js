@@ -7,4 +7,6 @@ export type CustomConfig = Config & {
   covalentApiKey?: string
   provider?: any
   covalentApiKey?: string
+  pinningServiceUrl?: string
+  pinningServiceApiKey?: string
 }
